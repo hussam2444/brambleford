@@ -242,3 +242,5 @@ button.act.gold { background: var(--gold); border-color: #8a5a0c; box-shadow: 0 
 .corner kbd { font-size: 11px; padding: 0 5px 1px; }
 .menu-note a { color: var(--wood-dark); font-weight: 600; }
 .menu-note a:hover { color: var(--gold); }
+.shop footer a { color: var(--wood-dark); font-weight: 600; }
+.shop footer a:hover { color: var(--gold); }

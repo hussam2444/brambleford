@@ -33,6 +33,8 @@ export interface GameWorld {
   dayNumber(): number;
   /** A public page listing this player's transactions, when the town is on a public chain. */
   explorerUrl(): string | null;
+  /** A shopkeeper's own account on the chain, if it has one. */
+  shopAccount(id: MerchantId): { id: string; url: string | null } | null;
   /** What starting over means here, in a sentence, and doing it (the page reloads). */
   startOverNote(): string;
   startOver(): void;
@@ -132,6 +134,10 @@ export class LocalWorld implements GameWorld {
   }
 
   explorerUrl() {
+    return null;
+  }
+
+  shopAccount() {
     return null;
   }
 

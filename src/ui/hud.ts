@@ -330,13 +330,14 @@ export class Hud {
       body = `<h3>${m.name} buys</h3>${buys}<h3>${m.name} sells</h3>${sells}`;
     }
 
+    const account = w.shopAccount(m.id);
     const share = Math.round(shareOf(w, m) * 100);
     const mayInvest = canInvest(w, m);
     const foot = `
-      ${m.plan ? `<p class="plan"><b>${m.name}'s plan</b>${escapeHtml(m.plan)}</p>` : ''}
+      ${m.plan ? `<p class="plan"><b>${m.name}'s plan${account ? `, signed by ${account.id}` : ''}</b>${escapeHtml(m.plan)}</p>` : ''}
       <div class="flash ${this.flash.kind}">${this.flash.text}</div>
       <footer>
-        <span>${m.name} has ${m.coins} coins in the till.<br />
+        <span>${m.name} has ${m.coins} coins in the till.${account?.url ? ` <a href="${account.url}" target="_blank" rel="noopener">The shop's own NEAR account ↗</a>` : ''}<br />
         ${share ? `You own ${share}% of this shop and get that share of each day's profit.` : 'You own none of this shop yet.'}</span>
         <button class="act gold" data-act="invest" ${mayInvest ? '' : 'disabled'}>Buy in · ${TOWN.investCost}</button>
       </footer>`;

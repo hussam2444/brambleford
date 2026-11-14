@@ -40,6 +40,28 @@ The contract has no copy of the rules. It imports `src/economy/town.ts` and
 and the chain cannot disagree. Coins are never created or destroyed: they move
 between shops, townsfolk and players, and the tests check the total every time.
 
+## Check the claims
+
+Each row is something this README says, where to see it, and a real
+transaction on testnet. Explorer pages open in any browser; nothing to install.
+
+| Claim | See it for yourself | A real transaction |
+|---|---|---|
+| The contract runs the town's hours, not a server | Section 4 prints the town straight from the contract. The clock is the contract's `tick` method, which anyone may call | [`tick`](https://testnet.nearblocks.io/txns/EUEkoZG524YSMsvc3cRoa23sFeAwsDYAGe9wv72VSp4Z): its log has a `hours_passed` event with each shop's takings |
+| Each shopkeeper is its own account and signs its own plan | In the game, a shop panel shows "…'s plan, signed by baker.brambleford.testnet" and links to that account | [`set_plan` signed by `baker.brambleford.testnet`](https://testnet.nearblocks.io/txns/HLbZ3HcaUJuYUs8XB1ywrfKUskqJTh1ynyRC4y4g5DyM). The contract refuses `set_plan` from anyone else (covered by `npm run test:contract`) |
+| A guest signs each action in the browser, the relayer pays, and the guest holds 0 NEAR | In the game: **Esc**, then the explorer link at the bottom of the menu, lists your own `join`, `gather` and `sell` | [`sell` by a guest](https://testnet.nearblocks.io/txns/HPTRzSKwkEjQenNfoiyFh9UgMykJkjGkRFY8PFxswXdw): signed by `brambleford-folk.testnet`, carrying a delegate action from [the guest's account](https://testnet.nearblocks.io/address/g4e65cfbec48010d4.brambleford-folk.testnet) |
+| Coins, goods and shop shares are NEP-245 balances in one contract | Run the command below. **See:** five numbers in quotes: the blacksmith's coins, ore, wood, tools, and the shares of her shop held by her own account (`"0"`) | [The contract's account](https://testnet.nearblocks.io/address/brambleford.testnet) |
+| Shops go under and come back with no one patching anything | Section 4 prints the town's recent history | The history lines in section 4 are stored by the contract itself |
+| Coins are never created or destroyed | Section 4 prints `coins 2200`; `npm run sim` and `npm run test:contract` check the total after every run | |
+
+```bash
+curl -s https://test.rpc.fastnear.com -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"query","params":{"request_type":"call_function","finality":"final","account_id":"brambleford.testnet","method_name":"mt_batch_balance_of","args_base64":"eyJhY2NvdW50X2lkIjoiYmxhY2tzbWl0aC5icmFtYmxlZm9yZC50ZXN0bmV0IiwidG9rZW5faWRzIjpbImNvaW4iLCJvcmUiLCJ3b29kIiwidG9vbHMiLCJzaGFyZTpibGFja3NtaXRoIl19"}}' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(Buffer.from(JSON.parse(s).result.result).toString()))'
+```
+
+What this entry is not: the shopkeepers follow fixed rules (no language model
+has been run), there is no Google or email sign-in, and the game loop is small.
+The full list is under "What is not done".
+
 ## 0. Play the hosted game (1 minute, nothing to install)
 
 1. Open https://brambleford.vercel.app and press any key.
@@ -127,11 +149,15 @@ step 1 installs quickly.
 No keys needed. This reads the town straight from the contract:
 
 ```bash
-curl -s https://test.rpc.fastnear.com -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"query","params":{"request_type":"call_function","finality":"final","account_id":"brambleford.testnet","method_name":"get_town","args_base64":"e30="}}' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const t=JSON.parse(Buffer.from(JSON.parse(s).result.result).toString());console.log("day",t.town.day,"hour",t.town.hour,"players",t.players,"coins",t.coin_supply);for(const m of Object.values(t.town.merchants))console.log(m.name,m.coins,"coins",JSON.stringify(m.stock),m.plan)})'
+curl -s https://test.rpc.fastnear.com -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"query","params":{"request_type":"call_function","finality":"final","account_id":"brambleford.testnet","method_name":"get_town","args_base64":"e30="}}' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const t=JSON.parse(Buffer.from(JSON.parse(s).result.result).toString());console.log("day",t.town.day,"hour",t.town.hour,"players",t.players,"coins",t.coin_supply);for(const m of Object.values(t.town.merchants))console.log(m.name,m.open?"open":"SHUT",m.coins,"coins",JSON.stringify(m.stock),m.plan);for(const e of t.town.events)console.log("day",e.day,e.text)})'
 ```
 
-**See:** the day and hour, the number of players, `coins 2200`, and each
-shopkeeper's purse, stock and current plan. The shopkeepers' accounts are
+**See:** the day and hour, the number of players, `coins 2200`, each
+shopkeeper's purse, stock and current plan, and then the town's recent history,
+one line per event. At the time of writing that history included
+`day 37 Maren the fishmonger has shut up shop. Rent went unpaid 2 days running.`
+and `day 40 The townsfolk clubbed together and Maren the fishmonger is open again.`
+Nobody wrote those: a run of bad fishing did it. The shopkeepers' accounts are
 `blacksmith.brambleford.testnet`, `baker.…`, `fishmonger.…` and `carpenter.…`;
 the townsfolk's purse is `townsfolk.brambleford.testnet`.
 
