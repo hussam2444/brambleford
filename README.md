@@ -258,7 +258,10 @@ Every push runs `npm test` and the contract tests on GitHub (`.github/workflows/
   means whoever runs the relayer could act for signed-in players. Guest
   accounts carry no such key. A guest's progress is not carried over on first
   sign-in, one player can use three browsers at a time, and there is no email
-  sign-in.
+  sign-in. The whole path is tested on a local chain with a stand-in for
+  Google, and the hosted game shows Google's button and turns away a made-up
+  credential, but nobody had yet signed in on the hosted game with a real
+  Google account when this was written.
 - **The model's reach is small on purpose.** It picks shelf targets once a
   day. It does not set prices, talk to players or bargain.
 - **"Already asked today" is kept in the server's memory.** After the host
