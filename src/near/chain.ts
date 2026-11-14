@@ -121,6 +121,16 @@ export class ChainWorld implements GameWorld {
     return `${where} · ${name} · ${this.busy || this.queue.length ? 'saving…' : this.lost ? 'reconnecting…' : 'saved'}`;
   }
 
+  startOverNote() {
+    return 'You get a brand new player with 20 coins. The town carries on as it is, and your old player and everything they own stay behind for good.';
+  }
+
+  /** Forget this browser's key, so the next load makes a new account. */
+  startOver() {
+    try { localStorage.removeItem(`brambleford:key:${this.contractId}`); } catch { /* nothing was stored */ }
+    location.reload();
+  }
+
   // ── Reading ───────────────────────────────────────────────────────────────
 
   private async read(): Promise<Snapshot> {

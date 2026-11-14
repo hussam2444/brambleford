@@ -506,6 +506,7 @@ export class TownScene extends Phaser.Scene {
   private startLapse() {
     if (this.lapse || !this.started) return;
     this.hud.closeShop();
+    this.hud.closeMenu();
     this.lapse = { live: this.world, history: [], done: false };
     this.world = LocalWorld.forecast(this.world, LAPSE.msPerHour);
     this.hud.setWorld(this.world);
@@ -573,10 +574,19 @@ export class TownScene extends Phaser.Scene {
     // true on the frame a movement key goes down (asked every frame, so an old press is never left waiting)
     const stepped = [k.W, k.A, k.S, k.D, k.UP, k.DOWN, k.LEFT, k.RIGHT].map((key) => Phaser.Input.Keyboard.JustDown(key)).some(Boolean);
 
+    if (this.hud.menuOpen) {
+      this.player.anims.stop();
+      if (esc) this.hud.closeMenu();
+      return;
+    }
     if (this.hud.shopOpen) {
       this.player.anims.stop();
       // Leave a shop the natural way too: just start walking.
       if (esc || act || stepped) this.hud.closeShop();
+      return;
+    }
+    if (esc) {
+      this.hud.openMenu();
       return;
     }
 
@@ -821,7 +831,7 @@ export class TownScene extends Phaser.Scene {
 
   private label(x: number, y: number, text: string, color: string) {
     return this.add
-      .text(x, y, text, { fontFamily: '"Pixelify Sans", monospace', fontSize: '8px', color, stroke: '#2b2233', strokeThickness: 2, resolution: this.zoom })
+      .text(x, y, text, { fontFamily: '"Jersey 15", "Pixelify Sans", monospace', fontSize: '8px', color, stroke: '#2b2233', strokeThickness: 2, resolution: this.zoom })
       .setOrigin(0.5, 1)
       .setDepth(DEPTH.fx);
   }
@@ -869,7 +879,7 @@ export class TownScene extends Phaser.Scene {
     const w = Phaser.Utils.Array.GetRandom(free);
     const say = this.add
       .text(w.sprite.x, w.sprite.y - 29, this.gossip(), {
-        fontFamily: '"Pixelify Sans", monospace', fontSize: '7px', color: '#3b2416', backgroundColor: '#fffaf0',
+        fontFamily: '"Jersey 15", "Pixelify Sans", monospace', fontSize: '7px', color: '#3b2416', backgroundColor: '#fffaf0',
         padding: { x: 3, y: 2 }, resolution: this.zoom, align: 'center', wordWrap: { width: 96 },
       })
       .setOrigin(0.5, 1)

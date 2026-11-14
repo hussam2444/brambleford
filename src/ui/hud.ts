@@ -37,6 +37,7 @@ const PERKS: Partial<Record<GoodId, string>> = {
 
 export class Hud {
   shopOpen: MerchantId | null = null;
+  menuOpen = false;
   private root: HTMLElement;
   private el: Record<string, HTMLElement> = {};
   private flash: { text: string; kind: 'good' | 'bad' | '' } = { text: '', kind: '' };
@@ -58,7 +59,7 @@ export class Hud {
       </div>
       <div class="goal panel" data-id="goal"></div>
       <div class="news panel" data-id="news"></div>
-      <div class="corner" data-id="corner"><button class="mute" data-act="mute" data-id="mute">♪ Sound on</button><button class="mute" data-act="lapse-start">▶▶ Watch a week go by</button><span>WASD move · E use · M sound</span><span class="where" data-id="where"></span></div>
+      <div class="corner" data-id="corner"><button class="mute" data-act="mute" data-id="mute">♪ Sound on</button><button class="mute" data-act="lapse-start">▶▶ Watch a week go by</button><span><kbd>Esc</kbd> menu and controls</span><span class="where" data-id="where"></span></div>
       <div class="lapse panel" data-id="lapse">
         <header><b>A week in a minute</b><span data-id="lapseWhen"></span><button class="act" data-act="lapse-stop" data-id="lapseStop">Stop</button></header>
         <p class="lapse-note">A copy of the town, run forward with nobody playing. Lines show each shop's price as a share of its usual price.</p>
@@ -66,6 +67,7 @@ export class Hud {
         <div class="lapse-legend" data-id="lapseLegend"></div>
         <div class="lapse-log" data-id="lapseLog"></div>
       </div>
+      <div class="shop-wrap" data-id="menuWrap"><div class="menu panel" data-id="menu"></div></div>
       <div class="title" data-id="title">
         <div class="title-card">
           <h1>Brambleford</h1>
@@ -154,7 +156,7 @@ export class Hud {
     const X = (i: number) => left + (i / Math.max(1, total - 1)) * (W - left - 6);
     const Y = (v: number) => (H - bottom) - ((Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo)) * (H - bottom - 6);
     c.clearRect(0, 0, W, H);
-    c.font = '11px "Pixelify Sans", monospace';
+    c.font = '11px "Jersey 15", "Pixelify Sans", monospace';
     c.fillStyle = '#7a5a3e';
     c.strokeStyle = '#d9c391';
     c.lineWidth = 1;
@@ -191,6 +193,44 @@ export class Hud {
   lapseNews(text: string) {
     const w = this.world.town;
     this.el.lapseLog.insertAdjacentHTML('afterbegin', `<div><b>Day ${w.day}</b> ${text}</div>`);
+  }
+
+  // ── The Esc menu ──────────────────────────────────────────────────────────
+
+  openMenu() {
+    this.menuOpen = true;
+    this.el.menuWrap.classList.add('show');
+    this.setPrompt(null);
+    this.renderMenu(false);
+    sfx.open();
+  }
+
+  closeMenu() {
+    if (this.menuOpen) sfx.close();
+    this.menuOpen = false;
+    this.el.menuWrap.classList.remove('show');
+  }
+
+  private renderMenu(confirming: boolean) {
+    const keys: [string, string][] = [
+      ['W A S D', 'or the arrow keys: walk'],
+      ['E', 'or Space: gather, talk. Hold to keep gathering'],
+      ['T', 'watch a week go by, and come back'],
+      ['M', 'sound on or off'],
+      ['Esc', 'this menu; also leaves a shop'],
+    ];
+    const body = confirming
+      ? `<p class="menu-note">${this.world.startOverNote()}</p>
+         <div class="menu-buttons"><button class="act gold" data-act="restart-yes">Yes, start over</button><button class="act" data-act="menu">Keep playing</button></div>`
+      : `<div class="menu-buttons">
+           <button class="act gold" data-act="menu-close">Back to town</button>
+           <button class="act" data-act="mute">${sfx.muted ? 'Turn sound on' : 'Turn sound off'}</button>
+           <button class="act" data-act="lapse-start">Watch a week go by</button>
+           <button class="act" data-act="restart-ask">Start over</button>
+         </div>
+         <dl class="menu-keys">${keys.map(([k, what]) => `<dt><kbd>${k}</kbd></dt><dd>${what}</dd>`).join('')}</dl>
+         <p class="menu-note">${this.world.status()}</p>`;
+    this.el.menu.innerHTML = `<h2>Brambleford</h2>${body}`;
   }
 
   setWhere(text: string) {
@@ -299,6 +339,7 @@ export class Hud {
     const target = (ev.target as HTMLElement).closest<HTMLElement>('[data-act]');
     if (!target) {
       if (ev.target === this.el.shopWrap) this.closeShop();
+      if (ev.target === this.el.menuWrap) this.closeMenu();
       return;
     }
     target.blur(); // otherwise Space, which is also "gather", would press this button again
@@ -312,9 +353,23 @@ export class Hud {
         return;
       case 'mute':
         this.setMuted(sfx.toggleMute());
+        if (this.menuOpen) this.renderMenu(false);
         return;
       case 'lapse-start':
+        this.closeMenu();
         this.onLapse(true);
+        return;
+      case 'menu':
+        this.renderMenu(false);
+        return;
+      case 'menu-close':
+        this.closeMenu();
+        return;
+      case 'restart-ask':
+        this.renderMenu(true);
+        return;
+      case 'restart-yes':
+        this.world.startOver();
         return;
       case 'lapse-stop':
         this.onLapse(false);

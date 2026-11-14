@@ -18,7 +18,9 @@ html, body {
   height: 100%;
   overflow: hidden;
   background: #1f2a1c;
-  font-family: 'Pixelify Sans', ui-monospace, monospace;
+  /* Jersey 15 is loaded with digits only, so numbers use it and everything else falls through to Pixelify Sans. */
+  font-family: 'Jersey 15', 'Pixelify Sans', ui-monospace, monospace;
+  font-synthesis: none;
   color: var(--ink);
   -webkit-font-smoothing: none;
 }
@@ -46,7 +48,7 @@ html, body {
 .status .when { justify-content: space-between; }
 .status .clock { color: var(--ink-soft); font-weight: 500; }
 .status img { width: 18px; height: 18px; }
-.status .coins { font-size: 22px; }
+.status .coins { font-size: 27px; line-height: 1; }
 .energy { flex: 1; height: 12px; background: #c9b27a; border: 2px solid var(--wood-dark); border-radius: 3px; overflow: hidden; }
 .energy > i { display: block; height: 100%; background: var(--energy); transition: width 0.2s; }
 .energy.low > i { background: var(--bad); }
@@ -73,7 +75,7 @@ html, body {
 }
 .slot img { width: 36px; height: 36px; }
 .slot.empty img { opacity: 0.18; filter: grayscale(1); }
-.slot .n { position: absolute; right: 3px; bottom: 0; font-size: 15px; font-weight: 700; text-shadow: 0 1px 0 var(--paper); }
+.slot .n { position: absolute; right: 3px; bottom: 0; font-size: 19px; line-height: 1.1; font-weight: 700; text-shadow: 0 1px 0 var(--paper); }
 .slot.food { cursor: pointer; }
 .slot.food:not(.empty):hover { border-color: var(--good); background: #eef0c0; }
 .slot .tip {
@@ -129,9 +131,9 @@ kbd {
 .line img.item { width: 36px; height: 36px; }
 .line .name { font-size: 18px; font-weight: 600; line-height: 1.1; }
 .line .name small { display: block; font-size: 13px; font-weight: 400; color: var(--ink-soft); }
-.price { position: relative; display: flex; align-items: center; gap: 4px; font-size: 20px; font-weight: 700; cursor: help; padding: 2px 4px; }
+.price { position: relative; display: flex; align-items: center; gap: 4px; font-size: 25px; font-weight: 700; cursor: help; padding: 2px 4px; }
 .price img { width: 18px; height: 18px; }
-.price .trend { font-size: 13px; font-weight: 600; }
+.price .trend { font-size: 16px; font-weight: 600; }
 .price .trend.up { color: var(--good); }
 .price .trend.down { color: var(--bad); }
 .price .why {
@@ -227,3 +229,14 @@ button.act.gold { background: var(--gold); border-color: #8a5a0c; box-shadow: 0 
 .lapse-log { margin-top: 8px; max-height: 62px; overflow: auto; font-size: 13px; line-height: 1.35; }
 .lapse-log b { color: var(--ink-soft); font-weight: 600; }
 @media (max-width: 560px) { .lapse-legend { grid-template-columns: 1fr; } }
+
+/* ── The Esc menu ── */
+.menu { width: min(420px, calc(100vw - 32px)); padding: 18px 22px 16px; text-align: center; }
+.menu h2 { margin: 0 0 14px; font-size: 30px; color: var(--wood-dark); }
+.menu-buttons { display: grid; gap: 8px; }
+.menu-buttons button.act { font-size: 17px; padding: 8px 12px; }
+.menu-keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 16px 0 0; text-align: left; font-size: 14px; line-height: 1.35; }
+.menu-keys dt { text-align: right; white-space: nowrap; }
+.menu-keys dd { margin: 0; align-self: center; }
+.menu-note { margin: 14px 0 12px; font-size: 14px; line-height: 1.4; color: var(--ink-soft); }
+.corner kbd { font-size: 11px; padding: 0 5px 1px; }

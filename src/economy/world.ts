@@ -29,6 +29,9 @@ export interface GameWorld {
   hourProgress(): number;
   /** News that has arrived since the last call. */
   drainNews(): string[];
+  /** What starting over means here, in a sentence, and doing it (the page reloads). */
+  startOverNote(): string;
+  startOver(): void;
 
   gather(good: GoodId): ActionResult;
   sell(merchant: MerchantId, good: GoodId, amount?: number): ActionResult;
@@ -115,6 +118,14 @@ export class LocalWorld implements GameWorld {
 
   totalCoins() {
     return Rules.totalCoins(this.town, [this.player]);
+  }
+
+  startOverNote() {
+    return 'The practice town starts again from day 1, and so do you.';
+  }
+
+  startOver() {
+    location.reload();
   }
 
   gather(good: GoodId) { return Rules.gather(this.town, this.player, good); }

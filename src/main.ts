@@ -16,7 +16,8 @@ async function makeWorld(): Promise<GameWorld> {
 
 async function start() {
   // Wait for the pixel font so in-world text does not flash in a fallback face.
-  const font = Promise.race([document.fonts.load('8px "Pixelify Sans"'), new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
+  const fonts = Promise.all([document.fonts.load('8px "Pixelify Sans"'), document.fonts.load('8px "Jersey 15"', '0123456789%')]);
+  const font = Promise.race([fonts, new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
   const [world] = await Promise.all([makeWorld(), font]);
 
   const boot = (type: number) =>
