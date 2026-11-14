@@ -11,9 +11,10 @@ function api(): Plugin {
         let body: unknown = {};
         try { body = JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch { /* treated as empty */ }
         const env = loadEnv(server.config.mode, process.cwd(), '');
-        const { handle } = await server.ssrLoadModule('/server/near.ts');
+        const { handle, methodAllowed } = await server.ssrLoadModule('/server/near.ts');
         const route = (req.url ?? '').split('?')[0].replace(/^\//, '');
-        const { status, json } = req.method === 'POST' ? await handle(route, body, env, req.socket.remoteAddress ?? 'local') : { status: 405, json: { error: 'Use POST.' } };
+        // The same rule as the hosted entry point: POST, or a GET for the clock.
+        const { status, json } = methodAllowed(route, req.method) ? await handle(route, body, env, req.socket.remoteAddress ?? 'local') : { status: 405, json: { error: 'Use POST.' } };
         res.statusCode = status;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(json));

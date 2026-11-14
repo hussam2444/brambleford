@@ -18,8 +18,9 @@ import {
 export const PLAYER_METHODS = ['join', 'gather', 'sell', 'buy', 'eat', 'invest', 'tick'];
 
 export interface ServerEnv {
-  /** Optional. With it, shopkeepers put their plans in their own words using NEAR AI Cloud. */
+  /** Optional. With it, a model on NEAR AI Cloud decides each shopkeeper's plan, inside hard limits. Without it, fixed rules do. */
   NEAR_AI_API_KEY?: string;
+  /** Optional. Which model to ask. Left empty, it is deepseek-ai/DeepSeek-V3.1. */
   NEAR_AI_MODEL?: string;
   /** Each shopkeeper's own key: NEAR_KEY_BLACKSMITH, NEAR_KEY_BAKER, and so on. */
   [key: `NEAR_KEY_${string}`]: string | undefined;
@@ -117,7 +118,12 @@ function innerResult(outcome: { receipts_outcome?: { outcome: { status: unknown 
   return value;
 }
 
-/** Run any game hours that have come due. Cheap to call early: it checks first. */
+/**
+ * Run any game hours that have come due. Cheap to call early: it checks first.
+ * A player's tab calls this while they play. The host's timer calls it every
+ * few minutes as well (the schedule is in `vercel.json`), so the town keeps
+ * its hours with nobody there.
+ */
 export async function tick(env: ServerEnv) {
   const { provider, relayer, contractId } = setup(env);
   const state = await provider.callFunction<{ now: number; next_tick_at: number }>({ contractId, method: 'get_town', args: {} });
@@ -127,18 +133,29 @@ export async function tick(env: ServerEnv) {
   return { ...result, skipped: false, planned };
 }
 
+/**
+ * Whether a route answers to an HTTP method. Everything is POST. The clock may
+ * also be nudged with a GET, because that is what the host's timer sends.
+ */
+export function methodAllowed(route: string, method?: string): boolean {
+  return method === 'POST' || (method === 'GET' && route === 'tick');
+}
+
 // ── Shopkeepers ─────────────────────────────────────────────────────────────
 //
-// Each shopkeeper is a NEAR account with its own key. Once a day, in the
-// morning, a shopkeeper looks at its own books and may change how much it
-// likes to keep on the shelf. It signs that change itself (`set_plan` on the
+// Each shopkeeper is a NEAR account with its own key. Once a day, while the
+// shops are open, a shopkeeper looks at its own books and may change how much
+// it likes to keep on the shelf. It signs that change itself (`set_plan` on the
 // contract refuses anyone else), and the relayer pays the gas.
 //
-// The decision is a few plain rules, below. If a NEAR AI Cloud key is set, the
-// shopkeeper also puts the reason in its own words; the numbers still come
-// from the rules, so a model can never set a wild target.
+// Who decides? With a NEAR AI Cloud key set, a language model does, speaking
+// as the shopkeeper. It is shown that shopkeeper's own books and nothing else,
+// and its answer is never trusted: only small steps, on goods the shop already
+// stocks, get through (`readReply`). When the model is slow, out of reach or
+// says something unusable, the plain rules in `decide` step in. With no key,
+// the rules decide every time.
 
-interface Shop {
+export interface Shop {
   id: string;
   name: string;
   title: string;
@@ -151,16 +168,22 @@ interface Shop {
   usualSales: Record<string, number>;
   recentSales: Record<string, number>;
   usualSupply: Record<string, number>;
+  /** Rent and wages due each evening. */
+  upkeep?: number;
 }
 interface TownView {
   town: { day: number; hour: number; season: { good: string; factor: number } | null; merchants: Record<string, Shop> };
 }
+type Season = TownView['town']['season'];
 
 const WORD: Record<string, string> = { ore: 'ore', wood: 'wood', wheat: 'wheat', fish: 'fish', tools: 'tools', bread: 'bread', smoked_fish: 'smoked fish', furniture: 'furniture' };
+/** A good's everyday name. One this file has not heard of is still named, from its id. */
+const word = (good: string) => WORD[good] ?? good.replace(/_/g, ' ');
 const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const owns = (bag: object, key: string) => Object.prototype.hasOwnProperty.call(bag, key);
 
-/** What a shopkeeper would change today, and why. Null if they are content. */
-export function decide(m: Shop, season: TownView['town']['season']): { target: Record<string, number>; plan: string } | null {
+/** What a shopkeeper would change today by the house rules, and why. Null if they are content. */
+export function decide(m: Shop, season: Season): { target: Record<string, number>; plan: string } | null {
   const target: Record<string, number> = {};
   const why: string[] = [];
 
@@ -169,7 +192,7 @@ export function decide(m: Shop, season: TownView['town']['season']): { target: R
   const usual = m.usualSales[out] ?? 1, recent = m.recentSales[out] ?? 0;
   if (recent > usual * 1.2 && have < want && want < 16) {
     target[out] = want + 2;
-    why.push(`${sentence(WORD[out])} keeps selling out, so I am making more.`);
+    why.push(`${sentence(word(out))} keeps selling out, so I am making more.`);
   } else if (recent < usual * 0.6 && have >= want && want > 2) {
     target[out] = want - 1;
     why.push('Trade has been slow, so I am keeping less on the shelf.');
@@ -179,69 +202,268 @@ export function decide(m: Shop, season: TownView['town']['season']): { target: R
     const cur = m.target[input] ?? 1;
     if (season?.good === input && season.factor < 1 && cur < 30) {
       target[input] = cur + 3;
-      why.push(`${sentence(WORD[input])} is scarce, so I am stocking up while I can.`);
+      why.push(`${sentence(word(input))} is scarce, so I am stocking up while I can.`);
     } else if (m.coins < 100 && cur > 3) {
       target[input] = cur - 2;
-      why.push(`Coin is tight, so I am buying in less ${WORD[input]}.`);
+      why.push(`Coin is tight, so I am buying in less ${word(input)}.`);
     } else if (m.coins > 300 && (m.stock[input] ?? 0) < cur * 0.5 && cur < 30) {
       target[input] = cur + 1;
-      why.push(`I keep running short of ${WORD[input]}, so I am buying more.`);
+      why.push(`I keep running short of ${word(input)}, so I am buying more.`);
     }
   }
   return why.length ? { target, plan: why.join(' ') } : null;
 }
 
-/** Ask NEAR AI Cloud to put a plan in the shopkeeper's own voice. Falls back to the plain wording on any problem. */
-async function inTheirWords(env: ServerEnv, m: Shop, plain: string): Promise<string> {
-  if (!env.NEAR_AI_API_KEY) return plain;
+// ── Asking the model ────────────────────────────────────────────────────────
+
+const NEAR_AI_URL = 'https://cloud-api.near.ai/v1/chat/completions';
+const DEFAULT_MODEL = 'deepseek-ai/DeepSeek-V3.1';
+/** How long the model gets to answer. The clock waits on it, so not long. */
+export const MODEL_TIMEOUT_MS = 7000;
+/**
+ * What a model may do to a plan, whatever it says. A shelf target moves at most
+ * `step` a day and stays between `min` and `max` (the contract holds it to the
+ * same range), and the reason is cut to `planChars`.
+ */
+export const PLAN_LIMITS = { step: 3, min: 1, max: 40, planChars: 200 };
+/** Recorded with a plan that the rules in `decide` made. */
+export const HOUSE_RULES = 'house rules';
+
+export interface Change {
+  /** The shelf targets that move, by good. */
+  target: Record<string, number>;
+  /** The reason, in the shopkeeper's words. */
+  plan: string;
+  /** Who decided: the model by name, or the house rules. Recorded with the plan. */
+  thinker: string;
+}
+
+const modelName = (env: ServerEnv) => (env.NEAR_AI_MODEL ?? '').trim() || DEFAULT_MODEL;
+/** How a plan the model made is signed off, for example "NEAR AI (deepseek-ai/DeepSeek-V3.1)". */
+export const thinkerName = (env: ServerEnv) => `NEAR AI (${tidy(modelName(env), 60)})`;
+
+/**
+ * Words from outside, made safe to store and to show: one line, no control or
+ * invisible characters, no angle brackets, and no longer than `max`.
+ */
+export function tidy(text: string, max: number): string {
+  const line = text
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ') // control characters and every kind of line break
+    .replace(/[\p{Cf}\p{Cs}<>]/gu, '') // invisible marks, broken halves of a character, angle brackets
+    .replace(/\s+/g, ' ')
+    .trim();
+  let kept = '';
+  for (const ch of line) { // one whole character at a time, so the cut never splits one
+    if (kept.length + ch.length > max) break;
+    kept += ch;
+  }
+  return kept.trim();
+}
+
+const whole = (n: unknown) => Math.round(Number(n) || 0);
+const tenths = (n: unknown) => Math.round((Number(n) || 0) * 10) / 10;
+const lettersOnly = (s: unknown) => String(s ?? '').replace(/[^A-Za-z]/g, '').slice(0, 20);
+const isPlainId = (id: string) => /^[a-z][a-z_]{0,23}$/.test(id);
+
+/**
+ * What the model is shown: this one shopkeeper's own books, and nothing else.
+ *
+ * Every word in it comes from this file, and everything taken from the town is
+ * a number, a good's id or a name cut down to its letters. Nothing a player
+ * could have written, such as an investor's account name, is passed on, so
+ * nobody can talk to the model through the town.
+ */
+export function booksFor(m: Shop, season: Season): { role: 'system' | 'user'; content: string }[] {
+  const name = lettersOnly(m.name) || 'a shopkeeper';
+  const trade = lettersOnly(m.title).toLowerCase() || 'shopkeeper';
+  const goods = Object.keys(m.target).filter(isPlainId);
+  const made = m.recipe.output;
+
+  const books = [`Coins in the till: ${whole(m.coins)}`];
+  if (typeof m.upkeep === 'number') books.push(`Rent due each evening: ${whole(m.upkeep)}`);
+  books.push(`The shop is ${m.open ? 'open' : 'shut'}.`, 'On the shelf:');
+  for (const g of goods) {
+    books.push(`- ${g}: ${whole(m.stock[g])} in stock, target ${whole(m.target[g])} (${g === made ? 'you make this' : 'you buy this in'})`);
+  }
+  if (goods.includes(made)) {
+    books.push(`Sales of ${made}: usually ${tenths(m.usualSales[made])} an hour, lately ${tenths(m.recentSales[made])} an hour.`);
+  }
+  if (season && goods.includes(season.good)) {
+    const share = whole(Number(season.factor) * 100);
+    books.push(`News: ${season.good} is ${share < 100 ? 'scarce' : 'plentiful'} in town. Gatherers are bringing in about ${share}% of the usual.`);
+  }
+
+  const brief = [
+    `You are ${name}, the ${trade} of Brambleford, a small market town. Once a day you look over your own books and decide how many of each good you like to keep on the shelf. That number is your target for the good.`,
+    '',
+    'How targets work:',
+    '- For what you make: you keep making it until the shelf holds your target, and the emptier the shelf is against the target, the more you charge.',
+    "- For what you buy in: the further your stock falls below the target, the more you pay the town's gatherers. More comes in, and more coin goes out.",
+    '- Rent is due every evening. Miss it two evenings running and the shop shuts.',
+    '',
+    'Answer with JSON only, nothing before or after it, in this shape:',
+    '{"target": {"<good>": <whole number>}, "plan": "<your reason>"}',
+    '- "target" lists every good on your shelf, by the exact name used in your books. To leave one as it is, repeat its target.',
+    `- Each number is a whole number from ${PLAN_LIMITS.min} to ${PLAN_LIMITS.max}, and at most ${PLAN_LIMITS.step} away from the target it has now.`,
+    `- "plan" is one or two short, plain sentences in your own voice, under ${PLAN_LIMITS.planChars} characters, saying what you are changing and why. No exclamation marks, no emoji, no line breaks.`,
+  ];
+  return [
+    { role: 'system', content: brief.join('\n') },
+    { role: 'user', content: `Your books today:\n${books.join('\n')}` },
+  ];
+}
+
+/** Where the `{` at `start` is closed, minding braces inside quoted text. -1 if it never is. */
+function closingBrace(text: string, start: number): number {
+  let depth = 0, quoted = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '\\') i += 1;
+      else if (c === '"') quoted = false;
+    } else if (c === '"') quoted = true;
+    else if (c === '{') depth += 1;
+    else if (c === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * The first JSON object in a model's reply. Models like to wrap JSON in a code
+ * fence, or to talk before and after it. None of that matters here.
+ */
+function firstObject(text: string): Record<string, unknown> | null {
+  for (let start = text.indexOf('{'); start !== -1; start = text.indexOf('{', start + 1)) {
+    const end = closingBrace(text, start);
+    if (end === -1) continue;
+    try {
+      const value: unknown = JSON.parse(text.slice(start, end + 1));
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+    } catch { /* not JSON from this brace: try the next one */ }
+  }
+  return null;
+}
+
+/**
+ * Turn a model's reply into a change of plan, trusting none of it.
+ *
+ * Only goods this shop already keeps a target for survive, and only as whole
+ * numbers inside `PLAN_LIMITS`. Everything else is dropped. The reason is
+ * tidied and cut to length. Null if nothing usable is left.
+ *
+ * `target` holds only the goods that actually move. If it comes back empty,
+ * the model looked and chose to leave the shop as it is.
+ */
+export function readReply(reply: string, m: Shop): { target: Record<string, number>; plan: string } | null {
+  const said = firstObject(reply.slice(0, 4000));
+  const asked = said?.target;
+  if (!said || typeof said.plan !== 'string' || !asked || typeof asked !== 'object' || Array.isArray(asked)) return null;
+
+  const target: Record<string, number> = {};
+  let usable = 0;
+  for (const [good, n] of Object.entries(asked)) {
+    const now = m.target[good];
+    if (!owns(m.target, good) || typeof now !== 'number') continue; // not something this shop stocks
+    if (typeof n !== 'number' || !Number.isInteger(n)) continue; // "12", 7.5, null
+    if (n < PLAN_LIMITS.min || n > PLAN_LIMITS.max || Math.abs(n - now) > PLAN_LIMITS.step) continue; // too far
+    usable += 1;
+    if (n !== now) target[good] = n;
+  }
+  const plan = tidy(said.plan, PLAN_LIMITS.planChars);
+  if (!usable || plan.length < 8) return null;
+  return { target, plan };
+}
+
+/** Ask the model what this shopkeeper should do. Null on any problem at all: no answer, a slow answer, a bad answer. */
+async function askModel(env: ServerEnv, m: Shop, season: Season, timeoutMs: number) {
   try {
-    const res = await fetch('https://cloud-api.near.ai/v1/chat/completions', {
+    const res = await fetch(NEAR_AI_URL, {
       method: 'POST',
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.NEAR_AI_API_KEY}` },
-      body: JSON.stringify({
-        model: env.NEAR_AI_MODEL ?? 'deepseek-ai/DeepSeek-V3.1',
-        max_tokens: 90,
-        messages: [
-          { role: 'system', content: `You are ${m.name}, the ${m.title.toLowerCase()} in a small, cozy market town. Say the following plan in your own voice, in one or two short plain sentences, under 200 characters. Keep every fact. No quotation marks.` },
-          { role: 'user', content: `${plain} (You have ${m.coins} coins in the till.)` },
-        ],
-      }),
+      body: JSON.stringify({ model: modelName(env), messages: booksFor(m, season), max_tokens: 300, temperature: 0.6 }),
     });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text: unknown = (await res.json())?.choices?.[0]?.message?.content;
-    return typeof text === 'string' && text.trim().length > 8 ? text.trim().slice(0, 240) : plain;
-  } catch {
-    return plain;
+    const decision = typeof text === 'string' ? readReply(text, m) : null;
+    if (!decision) throw new Error('an answer that could not be used');
+    return decision;
+  } catch (err) {
+    // Say why in the server's log, so a wrong key or model name is easy to spot. The key itself is never logged.
+    const why = err instanceof Error ? (err.name === 'TimeoutError' ? `no answer in ${timeoutMs} ms` : tidy(err.message, 80)) : 'an unknown problem';
+    console.warn(`NEAR AI did not decide for the ${tidy(m.id, 24)}: ${why}. The house rules stand in.`);
+    return null;
   }
 }
 
-/** Have a shopkeeper sign a change of plan with its own key. The relayer pays the gas. */
-export async function submitPlan(env: ServerEnv, id: string, target: Record<string, number>, plan: string) {
+/**
+ * What a shopkeeper changes today, why, and who decided. Null if nothing changes.
+ * With a NEAR AI key the model decides. If it cannot, the rules do.
+ */
+export async function think(env: ServerEnv, m: Shop, season: Season, timeoutMs = MODEL_TIMEOUT_MS): Promise<Change | null> {
+  if (env.NEAR_AI_API_KEY) {
+    const theirs = await askModel(env, m, season, timeoutMs);
+    // A usable answer that moves nothing is a decision too: the shop stays as it is.
+    if (theirs) return Object.keys(theirs.target).length ? { ...theirs, thinker: thinkerName(env) } : null;
+  }
+  const ours = decide(m, season);
+  return ours && { ...ours, thinker: HOUSE_RULES };
+}
+
+/**
+ * Have a shopkeeper sign a change of plan with its own key. The relayer pays the gas.
+ * `thinker` says who decided, and is recorded with the plan.
+ */
+export async function submitPlan(env: ServerEnv, id: string, target: Record<string, number>, plan: string, thinker = HOUSE_RULES) {
   const { provider, relayer, contractId } = setup(env);
   const key = env[`NEAR_KEY_${id.toUpperCase()}`];
   if (!key) throw new HttpError(503, `No key for the ${id}.`);
   const shopkeeper = new Account(`${id}.${contractId}`, provider, key as KeyPairString);
   const { signedDelegate } = await shopkeeper.createSignedMetaTransaction({
     receiverId: contractId,
-    actions: [actions.functionCall('set_plan', { target, plan }, teraToGas(100), 0n)],
+    actions: [actions.functionCall('set_plan', { target, plan, thinker }, teraToGas(100), 0n)],
     blockHeightTtl: 120,
   });
   const outcome = await relayer.relayMetaTransaction(signedDelegate);
   return { result: innerResult(outcome), transaction: outcome.transaction.hash };
 }
 
-/** In the morning, let one shopkeeper who has not planned today do so. One per call keeps each call short. */
+/**
+ * The game day on which the model was last asked about each shopkeeper. An
+ * answer of "no change" leaves no mark on the chain, so without this the same
+ * shopkeeper would be asked again every hour. Kept in memory only: after a
+ * restart, a shopkeeper who was content may be asked once more.
+ */
+const askedOn = new Map<string, number>();
+
+/** The shopkeepers, with a different one first each day, so that at one plan per call nobody is always last. */
+function inTurn<T>(shops: T[], day: number): T[] {
+  const first = shops.length ? Math.abs(Math.floor(day) || 0) % shops.length : 0;
+  return [...shops.slice(first), ...shops.slice(0, first)];
+}
+
+/**
+ * While the shops are open (6 to 19), let one shopkeeper who has not planned
+ * today do so. One per call keeps each call short: the model may take a few
+ * seconds, and whoever nudged the clock is waiting.
+ */
 async function planOne(env: ServerEnv) {
   const { provider, contractId } = setup(env);
   const view = await provider.callFunction<TownView>({ contractId, method: 'get_town', args: {} });
-  if (!view || view.town.hour < 6 || view.town.hour > 10) return null;
-  for (const m of Object.values(view.town.merchants)) {
-    if (!m.open || (m.plannedOn ?? 0) >= view.town.day || !env[`NEAR_KEY_${m.id.toUpperCase()}`]) continue;
-    const change = decide(m, view.town.season);
-    if (!change) continue;
-    const plan = await inTheirWords(env, m, change.plan);
-    await submitPlan(env, m.id, change.target, plan);
-    return { shop: m.id, plan };
+  if (!view || view.town.hour < 6 || view.town.hour > 19) return null;
+  const { day, season } = view.town;
+  const byModel = !!env.NEAR_AI_API_KEY;
+  for (const m of inTurn(Object.values(view.town.merchants), day)) {
+    if (!m.open || (m.plannedOn ?? 0) >= day || !env[`NEAR_KEY_${m.id.toUpperCase()}`]) continue;
+    if (byModel && askedOn.get(m.id) === day) continue;
+    if (byModel) askedOn.set(m.id, day);
+    const change = await think(env, m, season);
+    if (change) {
+      const sent = await submitPlan(env, m.id, change.target, change.plan, change.thinker);
+      const refused = (sent.result as { ok?: boolean } | null)?.ok === false;
+      return refused ? null : { shop: m.id, plan: change.plan, thinker: change.thinker, transaction: sent.transaction };
+    }
+    if (byModel) return null; // the model has had its one question for this call
   }
   return null;
 }
@@ -258,7 +480,7 @@ const LIMITS: Record<string, { max: number; perMs: number }> = {
 };
 const seen = new Map<string, { count: number; since: number }>();
 
-function allow(route: string, who: string): boolean {
+export function allow(route: string, who: string): boolean {
   const limit = LIMITS[route];
   if (!limit) return true;
   const now = Date.now();

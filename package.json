@@ -15,6 +15,7 @@
     "deploy": "tsx scripts/deploy.ts",
     "dev:testnet": "vite --mode testnet",
     "test:api": "tsx scripts/e2e-api.ts",
+    "test:server": "tsx scripts/server-test.ts",
     "setup:contract": "npm --prefix contract install",
     "host": "tsx scripts/host.ts"
   },
