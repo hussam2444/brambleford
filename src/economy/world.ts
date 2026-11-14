@@ -66,7 +66,7 @@ export interface GameWorld {
 export const isTradingHour = (w: GameWorld) => Rules.isTradingHour(w.town);
 export const gatherYield = (w: GameWorld) => Rules.gatherYield(w.player);
 /** The share of a shop's profit owed to this player, from 0 to 1. */
-export const shareOf = (w: GameWorld, m: Merchant) => (m.holders[w.me] ?? 0) / 100;
+export const shareOf = (w: GameWorld, m: Merchant) => Rules.tally(m.holders, w.me) / 100;
 export const canInvest = (w: GameWorld, m: Merchant) =>
   w.player.coins >= Rules.TOWN.investCost && Rules.investedPct(m) + Rules.TOWN.investPct <= Rules.TOWN.maxInvestedPct;
 /** What this player is worth: coins, goods at their usual price, and shop shares at what they cost. */
@@ -107,7 +107,8 @@ export class LocalWorld implements GameWorld {
    * fast pace. Nothing done to the copy touches the town it was copied from.
    */
   static forecast(from: GameWorld, msPerHour: number): LocalWorld {
-    const copy = new LocalWorld(Math.floor(Math.random() * 1e6));
+    // The copy's dice are set from the town itself, so the same town always gives the same week.
+    const copy = new LocalWorld((from.town.day * 24 + from.town.hour) * 7919 + from.town.purse * 31 + from.town.eventSeq);
     copy.town = JSON.parse(JSON.stringify(from.town));
     copy.player = JSON.parse(JSON.stringify(from.player));
     (copy as { me: string }).me = from.me;

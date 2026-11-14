@@ -165,8 +165,12 @@ export class ChainWorld implements GameWorld {
     // old news is old: only report what happens from now on
     this.seenEvent = this.town.eventSeq;
     this.seenNotice = this.player.noticeSeq;
-    // The one exception: what became of their coins while they were away.
-    if (wasGone) for (const n of this.player.notices.filter((note) => /^(While you were away|Welcome back)/.test(note.text)).slice(-2)) this.extraNews.push(n.text);
+    // The one exception: what became of their coins while they were away. One line, because
+    // the news shows one line at a time and this should not be pushed off by the next.
+    if (wasGone) {
+      const startedOff = this.player.notices.slice(-2).some((note) => note.text.startsWith('Welcome back'));
+      this.extraNews.push(`While you were away your coins went back to the townsfolk${startedOff ? ', who have now started you off again' : ''}. Your goods and your shares in shops were kept.`);
+    }
     this.lastHour = this.town.day * 24 + this.town.hour;
 
     // The town is shared and may be weeks old. A player counts days from their own arrival.

@@ -397,7 +397,7 @@ export class Brambleford {
     if (!this.tokenExists(token)) return 0;
     if (token.startsWith(SHARE)) {
       const m = this.town.merchants[token.slice(SHARE.length) as MerchantId];
-      return m?.holders[account] ?? 0;
+      return m ? Rules.tally(m.holders, account) : 0;
     }
     if (account === this.townAccount) return token === COIN ? this.town.purse : 0;
     const shop = this.merchantOf(account);
@@ -478,10 +478,10 @@ export class Brambleford {
       if (!Number.isInteger(n) || n <= 0) fail('Amounts must be positive whole numbers.');
       if (token.startsWith(SHARE)) {
         const m = this.town.merchants[token.slice(SHARE.length) as MerchantId];
-        if ((m.holders[from] ?? 0) < n) fail('Not enough of that share.');
+        if (Rules.tally(m.holders, from) < n) fail('Not enough of that share.');
         m.holders[from] -= n;
         if (m.holders[from] === 0) delete m.holders[from];
-        m.holders[to] = (m.holders[to] ?? 0) + n;
+        m.holders[to] = Rules.tally(m.holders, to) + n;
       } else if (token === COIN) {
         if (sender.coins < n) fail('Not enough coins.');
         sender.coins -= n;

@@ -272,10 +272,11 @@ export function newTown(): Town {
 
 /** Take up to `amount` coins out of the townsfolk's purse, as a gift to a player. Returns what could be found. */
 function fromThePurse(town: Town, amount: number): number {
-  // If the purse is short (late in a busy day it can be), the richest shopkeeper tops it up first.
-  if (town.purse < amount) {
+  // If the purse is short (late in a busy day it can be), the shopkeepers top it up, the richest first.
+  for (let asked = 0; asked < MERCHANT_IDS.length && town.purse < amount; asked++) {
     const richest = Object.values(town.merchants).reduce((a, b) => (b.coins > a.coins ? b : a));
     const help = Math.min(amount - town.purse, richest.coins);
+    if (help <= 0) break;
     richest.coins -= help;
     town.purse += help;
   }
@@ -373,10 +374,11 @@ function shopOf(town: Town, id: MerchantId): Merchant | undefined {
   return MERCHANT_IDS.includes(id) ? town.merchants[id] : undefined;
 }
 
-const owns = (bag: object, key: string) => Object.prototype.hasOwnProperty.call(bag, key);
+/** True if `key` is a plain word that this bag really holds. A list, a number or a name every JavaScript object has is not. */
+const owns = (bag: object, key: string) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(bag, key);
 
 /** A count kept under a player's id, or 0. Never fooled by names every JavaScript object has. */
-const tally = (bag: Record<string, number>, id: string) => (owns(bag, id) ? bag[id] : 0);
+export const tally = (bag: Record<string, number>, id: string) => (owns(bag, id) ? bag[id] : 0);
 
 function add(bag: Partial<Record<GoodId, number>>, good: GoodId, n: number) {
   bag[good] = Math.max(0, (bag[good] ?? 0) + n);
@@ -519,7 +521,8 @@ function closeOfDay(town: Town, pay: Pay) {
   for (const m of Object.values(town.merchants)) {
     if (!m.open) continue;
 
-    if (m.coins >= m.upkeep) {
+    const paidRent = m.coins >= m.upkeep;
+    if (paidRent) {
       m.coins -= m.upkeep;
       town.purse += m.upkeep; // rent and wages go back to the townsfolk
       m.missedRent = 0;
@@ -533,8 +536,9 @@ function closeOfDay(town: Town, pay: Pay) {
       }
     }
 
+    // Rent comes first. A shop that could not pay it has no profit to share out tonight.
     const profit = m.coins - m.coinsAtDawn;
-    if (profit > 0) {
+    if (paidRent && profit > 0) {
       for (const [holder, pct] of Object.entries(m.holders)) {
         const cut = Math.floor((profit * pct) / 100);
         if (cut <= 0) continue;
@@ -641,7 +645,7 @@ function postOrders(town: Town) {
  */
 function countTowardsOrder(town: Town, m: Merchant, p: Player, playerId: string, good: GoodId, count: number): number {
   const order = todaysOrders(town).find((o) => o.merchant === m.id && o.good === good && o.wonBy === undefined);
-  if (!order) return 0;
+  if (!order || playerId === '__proto__') return 0;
   const brought = tally(order.progress, playerId) + count;
   order.progress[playerId] = brought;
   if (brought < order.wanted) return 0;
@@ -680,8 +684,11 @@ export function sell(town: Town, p: Player, merchantId: MerchantId, good: GoodId
   if (!owns(m.usualSupply, good)) return { ok: false, message: `${m.name} has no use for ${GOODS[good]?.plural ?? 'that'}.` };
   if ((p.inventory[good] ?? 0) < 1) return { ok: false, message: `You have no ${GOODS[good].plural}.` };
 
+  const most = Math.floor(amount);
+  if (!(most >= 1)) return { ok: false, message: 'Sell at least one.' };
+
   let count = 0, total = 0, stop = '';
-  while (count < amount && (p.inventory[good] ?? 0) >= 1) {
+  while (count < most && (p.inventory[good] ?? 0) >= 1) {
     const q = quoteBuy(m, good);
     if (!q.available) { stop = q.reasons[q.reasons.length - 1]; break; }
     m.coins -= q.price;
@@ -732,6 +739,7 @@ export function invest(town: Town, p: Player, playerId: string, merchantId: Merc
   if (!m) return { ok: false, message: 'No such shop.' };
   if (investedPct(m) + TOWN.investPct > TOWN.maxInvestedPct) return { ok: false, message: `${m.name} won't part with any more of the shop.` };
   if (p.coins < TOWN.investCost) return { ok: false, message: `You need ${TOWN.investCost} coins to buy in.` };
+  if (playerId === '__proto__') return { ok: false, message: 'Nobody by that name can hold a share.' }; // not a name the books can keep
   p.coins -= TOWN.investCost;
   m.coins += TOWN.investCost;
   m.holders[playerId] = tally(m.holders, playerId) + TOWN.investPct;
