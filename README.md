@@ -67,7 +67,7 @@ transaction on testnet. Explorer pages open in any browser; nothing to install.
 | A guest signs each action in the browser, the relayer pays, and the guest holds 0 NEAR | In the game: **Esc**, then the explorer link at the bottom of the menu, lists your own `join`, `gather` and `sell` | [`sell` by a guest](https://testnet.nearblocks.io/txns/HPTRzSKwkEjQenNfoiyFh9UgMykJkjGkRFY8PFxswXdw): signed by `brambleford-folk.testnet`, carrying a delegate action from [the guest's account](https://testnet.nearblocks.io/address/g4e65cfbec48010d4.brambleford-folk.testnet) |
 | Coins, goods and shop shares are NEP-245 balances in one contract | Run the command below. **See:** five numbers in quotes: the blacksmith's coins, ore, wood, tools, and the shares of her shop held by her own account (`"0"`) | [The contract's account](https://testnet.nearblocks.io/address/brambleford.testnet) |
 | Shops go under and come back with no one patching anything | Section 4 prints the town's recent history | The history lines in section 4 are stored by the contract itself |
-| Coins are never created or destroyed | Section 4 prints `coins 2200`; `npm run sim` and `npm run test:contract` check the total after every run | |
+| Coins are never created or destroyed | Section 4 prints `coins 2200`. `npm run test:rules` plays 300 random games and counts the coins after every step; `npm run sim` and `npm run test:contract` count them too | |
 
 ```bash
 curl -s https://test.rpc.fastnear.com -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"query","params":{"request_type":"call_function","finality":"final","account_id":"brambleford.testnet","method_name":"mt_batch_balance_of","args_base64":"eyJhY2NvdW50X2lkIjoiYmxhY2tzbWl0aC5icmFtYmxlZm9yZC50ZXN0bmV0IiwidG9rZW5faWRzIjpbImNvaW4iLCJvcmUiLCJ3b29kIiwidG9vbHMiLCJzaGFyZTpibGFja3NtaXRoIl19"}}' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(Buffer.from(JSON.parse(s).result.result).toString()))'
@@ -186,7 +186,7 @@ The text under the buttons at the top left says which town you are in.
   known problem(s) listed above`. The known problem is printed in full, and is
   the one under "Balance" below.
 
-## 3. Run it on a NEAR chain on your machine (5 minutes)
+## 3. Run it on a NEAR chain on your machine (10 minutes)
 
 The contract and its build tools live in `contract/`, apart from the game, so
 step 1 installs quickly.
@@ -194,6 +194,8 @@ step 1 installs quickly.
 1. `npm run setup:contract` installs the contract's tools (near-sdk-js, near-workspaces).
 2. `npm run build:contract` builds `contract/build/brambleford.wasm`.
 3. `npm run test:contract` deploys it to a local sandbox and plays a short game.
+   It takes about five minutes, because it moves the sandbox's clock on by
+   hours to see what happens to players who leave.
    **See:** 52 lines starting `PASS`, then `All checks passed`. They cover
    joining, gathering, selling, buying, eating, conservation of coins, the
    shopkeeper-only `set_plan`, wanted orders and their bonus, the richest list,
