@@ -1,0 +1,4 @@
+{
+  "framework": "vite",
+  "functions": { "api/[route].ts": { "maxDuration": 30 } }
+}
