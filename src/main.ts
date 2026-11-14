@@ -19,17 +19,42 @@ async function start() {
   const font = Promise.race([document.fonts.load('8px "Pixelify Sans"'), new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
   const [world] = await Promise.all([makeWorld(), font]);
 
-  const game = new Phaser.Game({
-    type: Phaser.AUTO,
-    parent: 'game',
-    backgroundColor: '#1f2a1c',
-    pixelArt: true,
-    // Start from real numbers: a zero-sized canvas (a hidden tab) breaks WebGL setup.
-    scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth || 960, height: window.innerHeight || 600 },
-    callbacks: { preBoot: (g) => g.registry.set('world', world) },
-    scene: [TownScene],
+  const boot = (type: number) =>
+    new Phaser.Game({
+      type,
+      parent: 'game',
+      backgroundColor: '#1f2a1c',
+      pixelArt: true,
+      // Start from real numbers: a zero-sized canvas (a hidden tab) breaks WebGL setup.
+      scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth || 960, height: window.innerHeight || 600 },
+      callbacks: { preBoot: (g) => g.registry.set('world', world) },
+      scene: [TownScene],
+    });
+
+  // Add ?renderer=canvas to the address to skip WebGL altogether.
+  const forceCanvas = new URLSearchParams(location.search).get('renderer') === 'canvas';
+  let game = boot(forceCanvas ? Phaser.CANVAS : Phaser.AUTO);
+  const expose = () => {
+    if (import.meta.env.DEV) (window as unknown as { game: Phaser.Game }).game = game;
+  };
+  expose();
+
+  // Some browsers (headless ones, hidden tabs, machines without a working GPU)
+  // offer WebGL and then fail while setting it up. If the town has not appeared,
+  // start again with the plain 2D canvas renderer, which works everywhere.
+  let retried = false;
+  const useCanvas = () => {
+    if (retried || game.registry.get('town-ready')) return;
+    retried = true;
+    try { game.destroy(true); } catch { /* it never finished starting */ }
+    document.getElementById('game')!.replaceChildren();
+    game = boot(Phaser.CANVAS);
+    expose();
+  };
+  window.addEventListener('error', (ev) => {
+    if (/framebuffer|webgl/i.test(ev.message ?? '')) useCanvas();
   });
-  if (import.meta.env.DEV) (window as unknown as { game: Phaser.Game }).game = game;
+  window.setTimeout(useCanvas, 8000);
 }
 
 start();

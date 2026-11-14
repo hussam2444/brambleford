@@ -52,6 +52,10 @@ between shops, townsfolk and players, and the tests check the total every time.
    that you did not pay for.
 3. Press **T**. **See:** the time-lapse described in section 1, step 7.
 
+If the page stays on "Finding you a place in Brambleford…" for more than ten
+seconds, add `?renderer=canvas` to the address. The game switches to the plain
+canvas renderer by itself when WebGL fails to start, and that option forces it.
+
 If a shop is boarded up with a CLOSED sign, that is the economy at work: it
 missed rent twice. It reopens if a player buys in for 100 coins, or after three
 days when the townsfolk club together.

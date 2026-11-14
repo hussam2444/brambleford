@@ -138,6 +138,7 @@ export class TownScene extends Phaser.Scene {
 
   create() {
     this.world = this.registry.get('world') as GameWorld;
+    this.registry.set('town-ready', true);
     this.hud = new Hud(this.world);
     this.hud.onChange = () => this.syncShops();
     this.world.onUpdate = () => {
