@@ -52,6 +52,12 @@ between shops, townsfolk and players, and the tests check the total every time.
    that you did not pay for.
 3. Press **T**. **See:** the time-lapse described in section 1, step 7.
 
+The town on NEAR is shared and keeps its own calendar, so you may arrive at
+any hour, even at night when the shops are shut (they open at 6). The day shown
+at the top left is counted from your own arrival. **Esc** opens a menu with the
+controls and a **Start over** option: a new player in the shared town, or a
+private practice town that begins at day 1, 6 am and is not saved.
+
 If the page stays on "Finding you a place in Brambleford…" for more than ten
 seconds, add `?renderer=canvas` to the address. The game switches to the plain
 canvas renderer by itself when WebGL fails to start, and that option forces it.
