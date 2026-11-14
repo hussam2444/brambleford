@@ -129,7 +129,7 @@ export const TOWN = {
   investPct: 25,
   maxInvestedPct: 75,
   /** Anything a shopkeeper holds above this at day's end gets spent back into the town. */
-  comfortableSavings: 350,
+  comfortableSavings: 250,
   gatherEnergy: 2,
   maxEnergy: 40,
   /** How a shop's daily custom varies: from this share of an ordinary day's trade, up to that. */
@@ -210,6 +210,13 @@ export function newTown(): Town {
 
 /** A newcomer arrives. Their first coins are a gift from the townsfolk's purse. */
 export function newPlayer(town: Town): Player {
+  // If the purse is short (late in a busy day it can be), the richest shopkeeper tops it up first.
+  if (town.purse < TOWN.startingCoins) {
+    const richest = Object.values(town.merchants).reduce((a, b) => (b.coins > a.coins ? b : a));
+    const help = Math.min(TOWN.startingCoins - town.purse, richest.coins);
+    richest.coins -= help;
+    town.purse += help;
+  }
   const gift = Math.min(TOWN.startingCoins, town.purse);
   town.purse -= gift;
   return {
