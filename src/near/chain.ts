@@ -18,6 +18,10 @@ import type { ActionResult, GameWorld, MerchantId, Player, Town } from '../econo
 const CONTRACT = import.meta.env.VITE_NEAR_CONTRACT_ID as string | undefined;
 const RPC = (import.meta.env.VITE_NEAR_RPC_URL as string | undefined) ?? 'https://test.rpc.fastnear.com';
 const NETWORK = (import.meta.env.VITE_NEAR_NETWORK as string | undefined) ?? 'testnet';
+/** True when the address asks for a private practice town instead of the one on NEAR. */
+export const practiceRequested = () => new URLSearchParams(location.search).has('practice');
+/** True when this build knows of a town on NEAR at all. */
+export const chainConfigured = () => !!CONTRACT;
 const POLL_MS = 1500;
 const IDLE_AFTER_MS = 3 * 60 * 1000;
 
@@ -54,7 +58,7 @@ function browserKey(): KeyPairString {
 
 /** Returns the town on NEAR, or null if this build is not pointed at one. */
 export async function connectToChain(): Promise<GameWorld | null> {
-  if (!CONTRACT) return null;
+  if (!CONTRACT || practiceRequested()) return null;
   const secret = browserKey();
   const publicKey = KeyPair.fromString(secret).getPublicKey().toString();
   const { accountId } = await post<{ accountId: string }>('join', { publicKey });
@@ -91,6 +95,8 @@ export class ChainWorld implements GameWorld {
   private seenEvent = 0;
   private seenNotice = 0;
   private extraNews: string[] = [];
+  /** The town's day when this player first arrived. Their own count starts from there. */
+  private arrivedOn = 1;
 
   constructor(private account: Account, private provider: JsonRpcProvider, private contractId: string) {
     this.me = account.accountId;
@@ -111,6 +117,19 @@ export class ChainWorld implements GameWorld {
     this.seenEvent = this.town.eventSeq;
     this.seenNotice = this.player.noticeSeq;
     this.lastHour = this.town.day * 24 + this.town.hour;
+
+    // The town is shared and may be weeks old. A player counts days from their own arrival.
+    const slot = `brambleford:arrived:${this.me}`;
+    this.arrivedOn = this.town.day;
+    try {
+      const saved = Number(localStorage.getItem(slot));
+      if (saved >= 1 && saved <= this.town.day) this.arrivedOn = saved;
+      else localStorage.setItem(slot, String(this.town.day));
+    } catch { /* without storage the count simply starts today */ }
+  }
+
+  dayNumber() {
+    return Math.max(1, this.town.day - this.arrivedOn + 1);
   }
 
   status() {
@@ -122,7 +141,7 @@ export class ChainWorld implements GameWorld {
   }
 
   startOverNote() {
-    return 'You get a brand new player with 20 coins. The town carries on as it is, and your old player and everything they own stay behind for good.';
+    return 'You get a brand new player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. Your old player and everything they own stay behind for good.';
   }
 
   /** Forget this browser's key, so the next load makes a new account. */

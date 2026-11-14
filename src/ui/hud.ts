@@ -6,6 +6,7 @@ import { quoteBuy, quoteSell, type Quote } from '../economy/pricing';
 import { TOWN, canInvest, isTradingHour, shareOf, type GameWorld, type Merchant, type MerchantId } from '../economy/world';
 import { coinUrl, iconUrl, portraitUrl } from '../game/art';
 import { sfx } from '../game/sfx';
+import { chainConfigured, practiceRequested } from '../near/chain';
 
 /** One hour of the time-lapse: each shop's selling price as a share of normal, or null while it is shut. */
 export interface LapsePoint {
@@ -91,7 +92,7 @@ export class Hud {
     const hour = w.town.hour;
     const h = hour % 12 === 0 ? 12 : hour % 12;
     const night = !isTradingHour(w);
-    this.el.day.textContent = `Day ${w.town.day}`;
+    this.el.day.textContent = `Day ${w.dayNumber()}`;
     this.el.clock.textContent = `${night ? '☾' : '☀'} ${h}:00 ${hour < 12 ? 'am' : 'pm'}`;
     this.el.where.textContent = w.status();
     this.el.coins.textContent = String(w.player.coins);
@@ -146,7 +147,7 @@ export class Hud {
   drawLapse(history: LapsePoint[], total: number, done: boolean) {
     const w = this.world.town;
     const hour = w.hour % 12 === 0 ? 12 : w.hour % 12;
-    this.el.lapseWhen.textContent = done ? 'The week is over' : `Day ${w.day}, ${hour} ${w.hour < 12 ? 'am' : 'pm'}`;
+    this.el.lapseWhen.textContent = done ? 'The week is over' : `Day ${this.world.dayNumber()}, ${hour} ${w.hour < 12 ? 'am' : 'pm'}`;
     if (done) this.el.lapseStop.textContent = 'Back to town';
 
     const canvas = this.el.lapseChart as HTMLCanvasElement;
@@ -192,7 +193,7 @@ export class Hud {
 
   lapseNews(text: string) {
     const w = this.world.town;
-    this.el.lapseLog.insertAdjacentHTML('afterbegin', `<div><b>Day ${w.day}</b> ${text}</div>`);
+    this.el.lapseLog.insertAdjacentHTML('afterbegin', `<div><b>Day ${this.world.dayNumber()}</b> ${text}</div>`);
   }
 
   // ── The Esc menu ──────────────────────────────────────────────────────────
@@ -221,15 +222,20 @@ export class Hud {
     ];
     const body = confirming
       ? `<p class="menu-note">${this.world.startOverNote()}</p>
-         <div class="menu-buttons"><button class="act gold" data-act="restart-yes">Yes, start over</button><button class="act" data-act="menu">Keep playing</button></div>`
+         <div class="menu-buttons">
+           <button class="act gold" data-act="restart-yes">${this.world.mode === 'chain' ? 'New player in this town' : 'Yes, start over'}</button>
+           ${this.world.mode === 'chain' ? '<button class="act" data-act="practice-on">A private town from day 1 (not saved)</button>' : ''}
+           <button class="act" data-act="menu">Keep playing</button>
+         </div>`
       : `<div class="menu-buttons">
            <button class="act gold" data-act="menu-close">Back to town</button>
            <button class="act" data-act="mute">${sfx.muted ? 'Turn sound on' : 'Turn sound off'}</button>
            <button class="act" data-act="lapse-start">Watch a week go by</button>
            <button class="act" data-act="restart-ask">Start over</button>
+           ${this.world.mode === 'local' && chainConfigured() && practiceRequested() ? '<button class="act" data-act="practice-off">Go to the town on NEAR</button>' : ''}
          </div>
          <dl class="menu-keys">${keys.map(([k, what]) => `<dt><kbd>${k}</kbd></dt><dd>${what}</dd>`).join('')}</dl>
-         <p class="menu-note">${this.world.status()}</p>`;
+         <p class="menu-note">${this.world.status()}${this.world.mode === 'chain' ? `<br />This is your day ${this.world.dayNumber()}. The town itself is on day ${this.world.town.day}.` : ''}</p>`;
     this.el.menu.innerHTML = `<h2>Brambleford</h2>${body}`;
   }
 
@@ -370,6 +376,12 @@ export class Hud {
         return;
       case 'restart-yes':
         this.world.startOver();
+        return;
+      case 'practice-on':
+        location.search = '?practice';
+        return;
+      case 'practice-off':
+        location.search = '';
         return;
       case 'lapse-stop':
         this.onLapse(false);

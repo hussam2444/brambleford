@@ -29,6 +29,8 @@ export interface GameWorld {
   hourProgress(): number;
   /** News that has arrived since the last call. */
   drainNews(): string[];
+  /** Which day this is for the player: 1 on the day they arrived, however old the town is. */
+  dayNumber(): number;
   /** What starting over means here, in a sentence, and doing it (the page reloads). */
   startOverNote(): string;
   startOver(): void;
@@ -57,6 +59,8 @@ export class LocalWorld implements GameWorld {
   private clock = 0;
   /** When set, every hour takes this many milliseconds, day or night. Used by the time-lapse. */
   private pace: number | null = null;
+  /** The town's day on which the player counts "day 1", minus one. */
+  private dayOffset = 0;
   private seenEvent = 0;
   private seenNotice = 0;
 
@@ -76,6 +80,7 @@ export class LocalWorld implements GameWorld {
     copy.player = JSON.parse(JSON.stringify(from.player));
     (copy as { me: string }).me = from.me;
     copy.pace = msPerHour;
+    copy.dayOffset = from.town.day - from.dayNumber();
     copy.seenEvent = copy.town.eventSeq;
     copy.seenNotice = copy.player.noticeSeq;
     return copy;
@@ -114,6 +119,10 @@ export class LocalWorld implements GameWorld {
     for (const e of this.town.events) if (e.seq > this.seenEvent) { out.push(e.text); this.seenEvent = e.seq; }
     for (const n of this.player.notices) if (n.seq > this.seenNotice) { out.push(n.text); this.seenNotice = n.seq; }
     return out;
+  }
+
+  dayNumber() {
+    return this.town.day - this.dayOffset;
   }
 
   totalCoins() {

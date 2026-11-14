@@ -195,6 +195,12 @@ export class TownScene extends Phaser.Scene {
       this.showGoal();
       this.time.delayedCall(50, () => (this.tapped = { act: false, esc: false }));
       this.time.delayedCall(1500, () => this.hud.toast('Move with WASD or the arrow keys. Press E to gather and to talk.'));
+      // The town is shared, so a newcomer can arrive at any hour.
+      if (!isTradingHour(this.world)) {
+        this.time.delayedCall(5000, () => {
+          if (!isTradingHour(this.world)) this.hud.toast('It is night in Brambleford. The shops open at 6. You can still gather.');
+        });
+      }
     };
     window.addEventListener('keydown', begin, { once: true });
     window.addEventListener('pointerdown', begin, { once: true });
