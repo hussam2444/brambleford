@@ -348,7 +348,8 @@ export class TownScene extends Phaser.Scene {
 
   private placeWalkers() {
     ['villager1', 'villager2', 'villager3', 'villager4', 'villager5'].forEach((key, i) => {
-      const sprite = this.add.sprite((19 + i * 1.3) * T, (16.5 + (i % 2)) * T, `char-${key}`, 0).setOrigin(0.5, 1);
+      // start in columns clear of the well, so the first walk to the street does not cross it
+      const sprite = this.add.sprite([18.5, 19.5, 20.5, 23.5, 24.5][i] * T, (16.5 + (i % 2)) * T, `char-${key}`, 0).setOrigin(0.5, 1);
       this.walkers.push({ sprite, key, path: [], wait: 500 + i * 900, state: 'out' });
     });
   }
@@ -806,6 +807,7 @@ export class TownScene extends Phaser.Scene {
       else node.sprite.setVisible(false);
     }
     this.hud.refresh();
+    if (this.world.player.energy < TOWN.gatherEnergy) this.hud.toast("You're worn out. Eat something, or rest until morning.");
   }
 
   private respawnNodes(time: number) {
@@ -931,6 +933,7 @@ export class TownScene extends Phaser.Scene {
             if (w.state === 'leaving') {
               w.state = 'home';
               w.sprite.setVisible(false);
+              w.say?.setVisible(false); // do not leave their words hanging over an empty street
             } else {
               w.sprite.setFrame(next.y < 12 * T ? 3 : 0); // face the shop, or face us
               w.wait = 2500 + Math.random() * 5000;
