@@ -1,5 +1,7 @@
 # Brambleford
 
+[![CI](https://github.com/hussam2444/brambleford/actions/workflows/ci.yml/badge.svg)](https://github.com/hussam2444/brambleford/actions/workflows/ci.yml)
+
 A cozy pixel-art market town where the economy is the game. Built at NEAR
 HACKATHON for the track **Games With Real Economies** (`games`).
 
@@ -178,6 +180,11 @@ The text under the buttons at the top left says which town you are in.
 - `npm run sim -- flood` does the same, but a player dumps ore on the
   blacksmith on day 3. **See:** a line `-> player sold N ore; blacksmith now pays …`
   with a price below the usual 6.
+- `npm run test:rules` checks the rules themselves, with no chain: prices,
+  rent, dividends, orders, hostile input, and 300 random games in which every
+  accepted move is checked to the coin. **See:** `All 293 checks passed, 1
+  known problem(s) listed above`. The known problem is printed in full, and is
+  the one under "Balance" below.
 
 ## 3. Run it on a NEAR chain on your machine (5 minutes)
 
@@ -233,11 +240,13 @@ and a half minutes.
 
 | Command | What it checks | Needs |
 |---|---|---|
-| `npm test` | The types, a two-week run of the economy, the shared rules (`test:rules`), the back end with the model and the chain stood in (`test:server`, 211 checks), and the Google sign-in checks (`test:google`, 25 checks) | Nothing but `npm install` |
+| `npm test` | The types, a two-week run of the economy, the shared rules (`test:rules`, 293 checks), the back end with the model and the chain stood in (`test:server`, 211 checks), and the Google sign-in checks (`test:google`, 25 checks) | Nothing but `npm install` |
 | `npm run test:contract` | 52 checks against the real contract on a local sandbox chain (it fast-forwards the chain by hours, so allow five minutes) | `npm run setup:contract`, `npm run build:contract` |
 | `OLD_WASM=<an older build> npm run test:contract` | The same, plus an upgrade rehearsal: a town started by the older contract, then the new code deployed over it | An older `brambleford.wasm` |
 | `npm run test:api` | The HTTP API end to end: a guest joins, signs, is relayed; a shopkeeper plans; two browsers share one signed-in player | `npm run sandbox` and `npm run dev` running |
 | `npm run play:order -- <address>` | One guest with no screen fills a wanted order through the public API | The hosted game, or a sandbox and dev server |
+
+Every push runs `npm test` and the contract tests on GitHub (`.github/workflows/ci.yml`).
 
 ## What is not done
 

@@ -1,0 +1,95 @@
+# Checks every push to main and every pull request into main.
+#
+#   game      builds the game, then runs every test that needs no chain
+#   contract  builds the town contract and plays it on a NEAR sandbox,
+#             a private chain that lives and dies inside the job
+#
+# Nothing here touches testnet or mainnet, and no secrets are used.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# The jobs only ever read the code.
+permissions:
+  contents: read
+
+# A newer run of the same branch or pull request cancels the older one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  game:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # Node 22 is what the game is built and tested on. The README's steps
+      # for playing with no chain also work on Node 20.
+      - name: Set up Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install the game's packages
+        run: npm ci
+
+      - name: Build the game
+        run: npm run build
+
+      - name: Run the tests that need no chain
+        run: npm test
+
+  contract:
+    runs-on: ubuntu-latest
+    # The tests move a sandbox chain on by several hours, twice, which takes minutes on a small machine.
+    timeout-minutes: 30
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            contract/package-lock.json
+
+      - name: Install the game's packages
+        run: npm ci
+
+      # As it installs, near-sdk-js fetches its build tools (QuickJS, wasi-sdk
+      # and wasi-stub) from GitHub with curl and tar, and near-workspaces
+      # fetches the sandbox itself. ubuntu-latest has curl and tar, and is the
+      # Linux x64 machine all four are published for, so there is no extra
+      # step to install anything first.
+      - name: Install the contract's packages and build tools
+        run: npm run setup:contract
+
+      - name: Build the contract
+        id: build
+        run: npm run build:contract
+
+      # A failed build names the tool that failed and not the reason. Run this
+      # way, it gives the reason too.
+      - name: If the build failed, run it again to show why
+        if: failure() && steps.build.outcome == 'failure'
+        run: npm --prefix contract run build -- --verbose
+
+      - name: Play the contract on a sandbox
+        run: npm run test:contract

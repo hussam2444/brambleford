@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "sim": "tsx scripts/sim.ts",
     "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && npm run sim && npm run test:rules && npm run test:server && npm run test:google",
+    "test:rules": "tsx scripts/rules-test.ts",
     "build:contract": "npm --prefix contract run build",
     "test:contract": "npm --prefix contract test",
     "sandbox": "npm --prefix contract run sandbox",
@@ -16,6 +18,7 @@
     "dev:testnet": "vite --mode testnet",
     "test:api": "tsx scripts/e2e-api.ts",
     "test:server": "tsx scripts/server-test.ts",
+    "test:google": "tsx scripts/test-google.ts",
     "play:order": "tsx scripts/play-order.ts",
     "setup:contract": "npm --prefix contract install",
     "host": "tsx scripts/host.ts"
