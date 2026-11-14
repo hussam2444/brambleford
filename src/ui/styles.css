@@ -244,3 +244,22 @@ button.act.gold { background: var(--gold); border-color: #8a5a0c; box-shadow: 0 
 .menu-note a:hover { color: var(--gold); }
 .shop footer a { color: var(--wood-dark); font-weight: 600; }
 .shop footer a:hover { color: var(--gold); }
+
+/* ── Standing and the notice board ── */
+/* The player's title sits under the coin count. The status panel is a line taller for it, so the buttons below move down. */
+.status .rank { margin-top: -3px; font-size: 13px; font-weight: 500; color: var(--ink-soft); }
+.corner { top: 142px; }
+.shop .plan small { display: block; margin-top: 4px; font-size: 12px; color: var(--ink-soft); }
+/* The board borrows the shop panel's frame, headings and rows. */
+.board .bonus { display: flex; align-items: center; gap: 4px; font-size: 25px; font-weight: 700; }
+.board .bonus img { width: 18px; height: 18px; }
+.board .bonus small { font-size: 13px; font-weight: 400; color: var(--ink-soft); }
+.board .line.won { opacity: 0.6; }
+.board .quiet { margin: 6px 0; font-size: 15px; line-height: 1.35; color: var(--ink-soft); }
+.board .rich { list-style: none; margin: 0; padding: 0; font-size: 17px; }
+.board .rich li { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: center; padding: 3px 6px; border-radius: 4px; }
+.board .rich li.me { background: var(--paper-dark); font-weight: 700; }
+.board .rich .place { text-align: right; color: var(--ink-soft); }
+.board .rich small { margin-left: 8px; font-size: 13px; font-weight: 400; color: var(--ink-soft); }
+.board .rich .worth { display: flex; align-items: center; gap: 4px; font-weight: 700; }
+.board .rich .worth img { width: 14px; height: 14px; }

@@ -50,6 +50,12 @@ export class Brambleford {
   /** How much of each item exists. Coins are fixed for ever at `coinSupply`. */
   supply = {} as Record<string, number>;
   coinSupply = 0;
+  /**
+   * The ten richest players, brought up to date whenever one of them does something.
+   * A town that was started before this list existed has no such field in its stored
+   * state, so it is always read as `this.richest ?? []`.
+   */
+  richest: Rules.Rank[] | undefined = [];
   private nonce = 0;
 
   @initialize({})
@@ -136,6 +142,7 @@ export class Brambleford {
         p.coins += coins;
         Rules.notify(p, note);
         this.savePlayer(holder, p);
+        this.rank(holder, p);
         dividends.push({ old_owner_id: this.merchantAccounts[from], new_owner_id: holder, token_ids: [COIN], amounts: [String(coins)], memo: 'dividend' });
       });
       this.nextTickAt += Rules.hourMs(this.town);
@@ -160,7 +167,13 @@ export class Brambleford {
     const p = this.welcome(me);
     const result = run(me, p);
     this.savePlayer(me, p);
+    this.rank(me, p);
     return result;
+  }
+
+  /** Put what this player is now worth into the list of the richest players. */
+  private rank(id: string, p: Player) {
+    this.richest = Rules.ranked(this.richest ?? [], id, Rules.netWorth(this.town, p, id));
   }
 
   // ── The game ──────────────────────────────────────────────────────────────
@@ -200,13 +213,15 @@ export class Brambleford {
   @call({})
   sell({ merchant, good, amount }: { merchant: MerchantId; good: GoodId; amount?: number }): ActionResult {
     return this.act((me, p) => {
-      const r = Rules.sell(this.town, p, merchant, good, Math.max(1, Math.min(999, Math.floor(amount ?? 1))));
+      const r = Rules.sell(this.town, p, merchant, good, Math.max(1, Math.min(999, Math.floor(amount ?? 1))), me);
       if (r.ok) {
         const shop = this.merchantAccounts[merchant];
         emit('mt_transfer', [
           { old_owner_id: me, new_owner_id: shop, token_ids: [good], amounts: [String(r.count)] },
           { old_owner_id: shop, new_owner_id: me, token_ids: [COIN], amounts: [String(r.price)] },
         ]);
+        // The sale filled the shopkeeper's wanted order: the bonus is the shopkeeper's coins too.
+        if (r.bonus) emit('mt_transfer', [{ old_owner_id: shop, new_owner_id: me, token_ids: [COIN], amounts: [String(r.bonus)], memo: 'bonus for filling an order' }]);
       }
       return r;
     });
@@ -254,13 +269,14 @@ export class Brambleford {
   /**
    * A shopkeeper changes how much they like to keep on the shelf, and says why.
    * Only that shopkeeper's own NEAR account may call this.
+   * `thinker` is optional: a few words on who worked the plan out.
    */
   @call({})
-  set_plan({ target, plan }: { target: Partial<Record<GoodId, number>>; plan: string }): ActionResult {
+  set_plan({ target, plan, thinker }: { target: Partial<Record<GoodId, number>>; plan: string; thinker?: string }): ActionResult {
     const id = this.merchantOf(near.predecessorAccountId());
     if (!id) fail('Only a shopkeeper can change their own plan.');
     this.catchUp(CATCH_UP.duringAction);
-    return Rules.setPlan(this.town, this.town.merchants[id], target ?? {}, plan);
+    return Rules.setPlan(this.town, this.town.merchants[id], target ?? {}, plan, thinker ?? '');
   }
 
   // ── Reading the town ──────────────────────────────────────────────────────
@@ -275,6 +291,7 @@ export class Brambleford {
       coin_supply: this.coinSupply,
       town_account: this.townAccount,
       merchant_accounts: this.merchantAccounts,
+      richest: this.richest ?? [],
     };
   }
 
@@ -397,6 +414,8 @@ export class Brambleford {
     });
     this.savePlayer(from, sender);
     this.savePlayer(to, receiver);
+    this.rank(from, sender);
+    this.rank(to, receiver);
     emit('mt_transfer', [{ old_owner_id: from, new_owner_id: to, token_ids: tokens, amounts, ...(memo ? { memo } : {}) }]);
   }
 
