@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { GOODS, type GoodId } from '../economy/goods';
 import { quoteBuy, quoteSell } from '../economy/pricing';
-import { LocalWorld, canInvest, isTradingHour, shareOf, type GameWorld, type MerchantId } from '../economy/world';
+import { LocalWorld, TOWN, canInvest, isTradingHour, shareOf, type GameWorld, type MerchantId } from '../economy/world';
 import { Hud, type LapsePoint } from '../ui/hud';
 import * as Art from './art';
 import { TILE as T, type Dir } from './art';
@@ -12,7 +12,10 @@ import {
 } from './map';
 import { sfx } from './sfx';
 
-const WALK_SPEED = 74;
+const WALK_SPEED = 104;
+const VILLAGER_SPEED = 38;
+/** How far to the side, in pixels, the player will slip to get round an obstacle. */
+const SLIP_REACH = 7;
 const GATHER_COOLDOWN = 420;
 const RESPAWN_MS = 45000;
 
@@ -45,7 +48,8 @@ interface Walker {
   key: string;
   path: { x: number; y: number }[];
   wait: number;
-  home: boolean;
+  /** out: about town. leaving: walking home for the night. home: indoors, not drawn. */
+  state: 'out' | 'leaving' | 'home';
   say?: Phaser.GameObjects.Text;
 }
 
@@ -172,10 +176,10 @@ export class TownScene extends Phaser.Scene {
     this.scale.on('resize', () => this.fitCamera());
 
     const kb = this.input.keyboard!;
-    this.keys = kb.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT') as Record<string, Phaser.Input.Keyboard.Key>;
-    // Holding the key keeps gathering, but must not open and shut a shop over and over.
+    this.keys = kb.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,E,SPACE') as Record<string, Phaser.Input.Keyboard.Key>;
+    // A press counts once. Holding the key down is handled in update(), and only for gathering.
     const act = (ev: KeyboardEvent) => {
-      if (!ev.repeat || (!this.hud.shopOpen && this.nearest()?.kind === 'node')) this.tapped.act = true;
+      if (!ev.repeat) this.tapped.act = true;
     };
     kb.on('keydown-E', act);
     kb.on('keydown-SPACE', act);
@@ -223,7 +227,7 @@ export class TownScene extends Phaser.Scene {
         this.anims.create({
           key: `${key}-${dir}`,
           frames: [1, 0, 2, 0].map((f) => ({ key: name, frame: d * 3 + f })),
-          frameRate: 8,
+          frameRate: key === 'player' ? 11 : 8,
           repeat: -1,
         });
       });
@@ -345,7 +349,7 @@ export class TownScene extends Phaser.Scene {
   private placeWalkers() {
     ['villager1', 'villager2', 'villager3', 'villager4', 'villager5'].forEach((key, i) => {
       const sprite = this.add.sprite((19 + i * 1.3) * T, (16.5 + (i % 2)) * T, `char-${key}`, 0).setOrigin(0.5, 1);
-      this.walkers.push({ sprite, key, path: [], wait: 500 + i * 900, home: false });
+      this.walkers.push({ sprite, key, path: [], wait: 500 + i * 900, state: 'out' });
     });
   }
 
@@ -564,10 +568,14 @@ export class TownScene extends Phaser.Scene {
 
     const { act, esc } = this.tapped;
     this.tapped = { act: false, esc: false };
+    const k = this.keys;
+    // true on the frame a movement key goes down (asked every frame, so an old press is never left waiting)
+    const stepped = [k.W, k.A, k.S, k.D, k.UP, k.DOWN, k.LEFT, k.RIGHT].map((key) => Phaser.Input.Keyboard.JustDown(key)).some(Boolean);
 
     if (this.hud.shopOpen) {
       this.player.anims.stop();
-      if (esc || act) this.hud.closeShop();
+      // Leave a shop the natural way too: just start walking.
+      if (esc || act || stepped) this.hud.closeShop();
       return;
     }
 
@@ -576,11 +584,15 @@ export class TownScene extends Phaser.Scene {
     if (!target) this.hud.setPrompt(null);
     else if (target.kind === 'keeper') this.hud.setPrompt(`<kbd>E</kbd> Talk to ${this.world.town.merchants[target.id].name}`);
     else this.hud.setPrompt(`<kbd>E</kbd> ${VERB[target.node.good]}`);
+    if (!target) return;
 
-    if (act && target) {
-      if (target.kind === 'keeper') this.hud.openShop(target.id);
-      else this.gather(target.node, time);
+    if (target.kind === 'keeper') {
+      if (act) this.hud.openShop(target.id);
+      return;
     }
+    // Hold the key to keep gathering, for as long as there is energy to do it.
+    const holding = (k.E.isDown || k.SPACE.isDown) && this.world.player.energy >= TOWN.gatherEnergy;
+    if (act || holding) this.gather(target.node, time);
   }
 
   private runClock(delta: number) {
@@ -711,10 +723,34 @@ export class TownScene extends Phaser.Scene {
     if (dx && dy) { dx *= Math.SQRT1_2; dy *= Math.SQRT1_2; }
     const step = (WALK_SPEED * Math.min(delta, 50)) / 1000;
     const p = this.player;
-    if (this.walkable(p.x + dx * step, p.y)) p.x += dx * step;
-    if (this.walkable(p.x, p.y + dy * step)) p.y += dy * step;
+    const movedX = dx !== 0 && this.walkable(p.x + dx * step, p.y);
+    if (movedX) p.x += dx * step;
+    const movedY = dy !== 0 && this.walkable(p.x, p.y + dy * step);
+    if (movedY) p.y += dy * step;
+    // Walking straight into the edge of a rock, a lamp or a corner: slip round it instead of stopping dead.
+    if (!movedX && !movedY && (dx === 0 || dy === 0)) {
+      const side = this.wayRound(p.x, p.y, dx * step, dy * step);
+      if (dx === 0) p.x += side * step;
+      else p.y += side * step;
+    }
     p.setDepth(p.y);
     p.anims.play(`player-${this.facing}`, true);
+  }
+
+  /**
+   * Blocked while walking along one axis: which way (-1, 0 or 1) along the other
+   * axis is the nearer gap, if there is one within a few pixels? Head-on, the player still stops.
+   */
+  private wayRound(x: number, y: number, stepX: number, stepY: number): number {
+    for (let off = 1; off <= SLIP_REACH; off++) {
+      for (const side of [-1, 1]) {
+        const sx = stepX === 0 ? side * off : 0;
+        const sy = stepX === 0 ? 0 : side * off;
+        // the gap must be open, and so must every step of the way to it
+        if (this.walkable(x + sx + stepX, y + sy + stepY) && this.walkable(x + sx, y + sy) && this.walkable(x + Math.sign(sx), y + Math.sign(sy))) return side;
+      }
+    }
+    return 0;
   }
 
   private nearest():
@@ -826,7 +862,7 @@ export class TownScene extends Phaser.Scene {
   }
 
   private chatter() {
-    const free = this.walkers.filter((w) => !w.home && !w.say && w.sprite.visible);
+    const free = this.walkers.filter((w) => w.state === 'out' && !w.say && w.sprite.visible);
     if (!free.length || !isTradingHour(this.world)) return;
     const w = Phaser.Utils.Array.GetRandom(free);
     const say = this.add
@@ -843,36 +879,41 @@ export class TownScene extends Phaser.Scene {
     });
   }
 
-  private pickPath(w: Walker): { x: number; y: number }[] {
-    const from = { x: w.sprite.x, y: w.sprite.y };
+  /** Villagers keep to the street: along it, then straight to where they are going. */
+  private route(w: Walker, goal: { x: number; y: number }): { x: number; y: number }[] {
     const street = 12.6 * T;
-    const openShops = SHOPS.filter((s) => this.world.town.merchants[s.id].open);
-    let goal: { x: number; y: number };
+    return [{ x: w.sprite.x, y: street }, { x: goal.x, y: street }, goal];
+  }
 
-    if (!isTradingHour(this.world)) {
-      w.home = true;
-      goal = { x: (Math.random() < 0.5 ? 3.5 : 38.5) * T, y: street };
-    } else if (openShops.length && Math.random() < 0.65) {
-      const s = Phaser.Utils.Array.GetRandom(openShops);
-      const door = doorTile(s);
-      goal = { x: (door.x + 0.5 + (Math.random() < 0.5 ? -0.9 : 0.9)) * T, y: 11.75 * T };
-    } else {
-      const col = Phaser.Utils.Array.GetRandom([18.5, 19.5, 20.5, 23.5, 24.5, 25.5]);
-      goal = { x: col * T, y: Phaser.Math.Between(14, 17) * T + 8 };
+  private pickPath(w: Walker): { x: number; y: number }[] {
+    const openShops = SHOPS.filter((s) => this.world.town.merchants[s.id].open);
+    if (openShops.length && Math.random() < 0.65) {
+      const door = doorTile(Phaser.Utils.Array.GetRandom(openShops));
+      return this.route(w, { x: (door.x + 0.5 + (Math.random() < 0.5 ? -0.9 : 0.9)) * T, y: 11.75 * T });
     }
-    return [{ x: from.x, y: street }, { x: goal.x, y: street }, goal];
+    const col = Phaser.Utils.Array.GetRandom([18.5, 19.5, 20.5, 23.5, 24.5, 25.5]);
+    return this.route(w, { x: col * T, y: Phaser.Math.Between(14, 17) * T + 8 });
   }
 
   private updateWalkers(delta: number) {
     const awake = isTradingHour(this.world);
     for (const w of this.walkers) {
-      if (w.home) {
+      if (w.state === 'home') {
         if (!awake) continue;
-        w.home = false;
+        w.state = 'out'; // morning: step back out where they went in
         w.sprite.setVisible(true);
         w.wait = Math.random() * 3000;
+      } else if (!awake && w.state === 'out') {
+        // Night has fallen: drop everything and walk home, off the nearer end of the street.
+        w.state = 'leaving';
+        w.path = this.route(w, { x: (w.sprite.x < 21 * T ? 3.5 : 38.5) * T, y: 12.6 * T });
+      } else if (awake && w.state === 'leaving') {
+        w.state = 'out'; // dawn came before they got home
+        w.path = [];
+        w.wait = 0;
       }
-      if (!w.path.length) {
+
+      if (!w.path.length && w.state === 'out') {
         w.wait -= delta;
         if (w.wait <= 0) w.path = this.pickPath(w);
       }
@@ -881,14 +922,16 @@ export class TownScene extends Phaser.Scene {
         const dx = next.x - w.sprite.x;
         const dy = next.y - w.sprite.y;
         const dist = Math.hypot(dx, dy);
-        const step = (34 * Math.min(delta, 50)) / 1000;
+        const step = (VILLAGER_SPEED * Math.min(delta, 50 * LAPSE.crowdSpeed)) / 1000;
         if (dist <= step) {
           w.sprite.setPosition(next.x, next.y);
           w.path.shift();
           if (!w.path.length) {
             w.sprite.anims.stop();
-            if (w.home) w.sprite.setVisible(false);
-            else {
+            if (w.state === 'leaving') {
+              w.state = 'home';
+              w.sprite.setVisible(false);
+            } else {
               w.sprite.setFrame(next.y < 12 * T ? 3 : 0); // face the shop, or face us
               w.wait = 2500 + Math.random() * 5000;
             }
@@ -899,6 +942,8 @@ export class TownScene extends Phaser.Scene {
           const dir: Dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : dy < 0 ? 'up' : 'down';
           w.sprite.anims.play(`${w.key}-${dir}`, true);
         }
+      } else if (w.sprite.anims.isPlaying) {
+        w.sprite.anims.stop(); // nowhere to go: never walk on the spot
       }
       w.sprite.setDepth(w.sprite.y);
       w.say?.setPosition(w.sprite.x, w.sprite.y - 29);
