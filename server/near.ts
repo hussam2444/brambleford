@@ -73,6 +73,7 @@ export async function join(env: ServerEnv, body: { publicKey?: string }) {
 /** Submit an action a player signed, paying its gas. Only calls to the game, from accounts made here, are accepted. */
 export async function relay(env: ServerEnv, body: { signedDelegate?: string }) {
   const { relayer, contractId, relayerId } = setup(env);
+  if (String(body.signedDelegate ?? '').length > 2000) throw new HttpError(413, 'That action is too large.');
   let signed;
   try {
     signed = decodeSignedDelegate(Buffer.from(String(body.signedDelegate), 'base64'));
@@ -82,6 +83,12 @@ export async function relay(env: ServerEnv, body: { signedDelegate?: string }) {
   const { senderId, receiverId } = signed.delegateAction;
   if (receiverId !== contractId) throw new HttpError(403, 'This relayer only serves the Brambleford contract.');
   if (!senderId.endsWith(`.${relayerId}`)) throw new HttpError(403, 'This relayer only serves accounts it created.');
+  // Pay only for one ordinary game action: no deposits, no oversized calls, no other methods.
+  const inner = signed.delegateAction.actions;
+  const call = inner.length === 1 ? inner[0].functionCall : undefined;
+  if (!call || !PLAYER_METHODS.includes(call.methodName) || BigInt(call.deposit) !== 0n || BigInt(call.gas) > teraToGas(120) || call.args.length > 512) {
+    throw new HttpError(403, 'This relayer only pays for ordinary game actions.');
+  }
 
   const outcome = await relayer.relayMetaTransaction(signed);
   return { result: innerResult(outcome), transaction: outcome.transaction.hash };
@@ -237,8 +244,36 @@ async function planOne(env: ServerEnv) {
   return null;
 }
 
+// ── Fair use ────────────────────────────────────────────────────────────────
+// A simple per-address limit so one visitor cannot spend the relayer's NEAR in
+// a loop. It lives in memory, so on a host that runs several copies of this
+// code it is a speed bump, not a wall.
+
+const LIMITS: Record<string, { max: number; perMs: number }> = {
+  join: { max: 20, perMs: 60 * 60 * 1000 },
+  relay: { max: 90, perMs: 60 * 1000 },
+  tick: { max: 30, perMs: 60 * 1000 },
+};
+const seen = new Map<string, { count: number; since: number }>();
+
+function allow(route: string, who: string): boolean {
+  const limit = LIMITS[route];
+  if (!limit) return true;
+  const now = Date.now();
+  const key = `${route}:${who}`;
+  const entry = seen.get(key);
+  if (!entry || now - entry.since > limit.perMs) {
+    if (seen.size > 5000) seen.clear();
+    seen.set(key, { count: 1, since: now });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= limit.max;
+}
+
 /** One entry point for every route, used by both the dev server and the hosted functions. */
-export async function handle(route: string, body: unknown, env: ServerEnv): Promise<{ status: number; json: unknown }> {
+export async function handle(route: string, body: unknown, env: ServerEnv, who = 'local'): Promise<{ status: number; json: unknown }> {
+  if (!allow(route, who)) return { status: 429, json: { error: 'Too many requests. Try again in a moment.' } };
   try {
     const data = (body ?? {}) as Record<string, string>;
     if (route === 'join') return { status: 200, json: await join(env, data) };

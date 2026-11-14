@@ -256,7 +256,7 @@ export class Hud {
 
     let body: string;
     if (!m.open) {
-      body = `<p class="shut">The shutters are down. ${m.name} couldn't pay the rent.<br />Put up ${TOWN.investCost} coins and the shop reopens, with ${TOWN.investPct}% of its profits yours.</p>`;
+      body = `<p class="shut">The shutters are down. ${m.name} couldn't pay the rent.<br />Put up ${TOWN.investCost} coins and the shop reopens, with ${TOWN.investPct}% of its profits yours. If nobody does, the townsfolk will club together in a few days.</p>`;
     } else if (!isTradingHour(w)) {
       body = `<p class="shut">${m.name} has gone to bed.<br />Shops open at ${TOWN.openHour} in the morning.</p>`;
     } else {
@@ -288,7 +288,7 @@ export class Hud {
       ${m.plan ? `<p class="plan"><b>${m.name}'s plan</b>${escapeHtml(m.plan)}</p>` : ''}
       <div class="flash ${this.flash.kind}">${this.flash.text}</div>
       <footer>
-        <span>${m.open ? `${m.name} has ${m.coins} coins in the till.` : 'The till is empty.'}<br />
+        <span>${m.name} has ${m.coins} coins in the till.<br />
         ${share ? `You own ${share}% of this shop and get that share of each day's profit.` : 'You own none of this shop yet.'}</span>
         <button class="act gold" data-act="invest" ${mayInvest ? '' : 'disabled'}>Buy in · ${TOWN.investCost}</button>
       </footer>`;
@@ -301,6 +301,7 @@ export class Hud {
       if (ev.target === this.el.shopWrap) this.closeShop();
       return;
     }
+    target.blur(); // otherwise Space, which is also "gather", would press this button again
     const w = this.world;
     const good = target.dataset.good as GoodId | undefined;
     const id = this.shopOpen;

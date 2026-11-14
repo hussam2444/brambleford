@@ -33,6 +33,11 @@ console.log('town  ', `day ${state.town.day} ${state.town.hour}:00, next hour in
 const bal = await provider.viewAccount({ accountId: me.accountId });
 console.log('player account holds', bal.amount.toString(), 'yoctoNEAR (the relayer paid for everything)');
 console.log('tick  ', JSON.stringify((await post('tick')).json));
+// the relayer must refuse to pay for anything that is not an ordinary game action
+const { signedDelegate: sneaky } = await me.createSignedMetaTransaction({ receiverId: env.NEAR_CONTRACT_ID, actions: [actions.functionCall('set_plan', { target: {}, plan: 'x' }, teraToGas(120), 0n)], blockHeightTtl: 120 });
+const refused = await post('relay', { signedDelegate: Buffer.from(encodeSignedDelegate(sneaky)).toString('base64') });
+console.log('other method', refused.status, JSON.stringify(refused.json));
+
 // a shopkeeper signs a change of plan with its own key (sandbox only: this writes a made-up plan)
 if (env.VITE_NEAR_NETWORK !== 'sandbox') process.exit(0);
 const { decide, submitPlan } = await import('../server/near');

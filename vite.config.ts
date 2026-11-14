@@ -13,7 +13,7 @@ function api(): Plugin {
         const env = loadEnv(server.config.mode, process.cwd(), '');
         const { handle } = await server.ssrLoadModule('/server/near.ts');
         const route = (req.url ?? '').split('?')[0].replace(/^\//, '');
-        const { status, json } = req.method === 'POST' ? await handle(route, body, env) : { status: 405, json: { error: 'Use POST.' } };
+        const { status, json } = req.method === 'POST' ? await handle(route, body, env, req.socket.remoteAddress ?? 'local') : { status: 405, json: { error: 'Use POST.' } };
         res.statusCode = status;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(json));

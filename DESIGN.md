@@ -12,14 +12,14 @@ Reference feel: Stardew Valley's town and shops. Not a trading terminal.
 | Timescale | What the player does | What they feel |
 |---|---|---|
 | Every 30 seconds | Swing at a rock, tree, wheat patch or fishing spot; or walk to a shop and sell | "I got something, and the price moved because of me" |
-| Every 5 minutes (one game day) | Spend the day's energy, pick who to sell to, buy bread to keep going, read the day's news | "I timed that well" or "I should have waited" |
+| Every 2 to 3 minutes (one game day) | Spend the day's energy, pick who to sell to, buy bread to keep going, read the day's news | "I timed that well" or "I should have waited" |
 | Every session | Buy tools to gather faster, buy into a shop for a share of its profit, rescue a shop that went under | "Part of this town is mine" |
 
 ## First minute (no tutorial screen)
 
 1. You appear in the town square with 20 coins and an empty bag.
 2. A rock by the mine sparkles. Walk up, press **E**, get ore.
-3. The blacksmith has a `!` over her head. Walk up, press **E**, sell.
+3. A yellow arrow points at the blacksmith. Walk up, press **E**, sell.
 4. Her price for ore drops a little as you sell. That is the whole game in one beat.
 
 ## The town
@@ -38,7 +38,7 @@ Reference feel: Stardew Valley's town and shops. Not a trading terminal.
   is short of something and less when it has plenty; it charges more when trade
   is brisk; it pays less when its purse is thin; it never sells below cost.
   Each quote comes with the shopkeeper's reasoning in plain words (the tooltip).
-- `world.ts` runs the hour: gatherers sell to shops, shops make goods,
+- `town.ts` runs the hour: gatherers sell to shops, shops make goods,
   townsfolk buy, and at day's end shops pay rent. Two missed rents and a shop
   shuts until someone invests.
 - Supply shocks (blight, a mine collapse, a salmon run) arrive on their own and

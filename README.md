@@ -14,8 +14,14 @@ put an economy on a blockchain usually make the player manage a wallet first.
 **What this is.** A town whose whole economy runs in one NEAR contract, played
 from a browser with no wallet, no seed phrase and no gas.
 
-The town is live on NEAR testnet at
+**Play it now:** https://brambleford.vercel.app (no sign-up, no wallet). The
+town is live on NEAR testnet at
 [`brambleford.testnet`](https://testnet.nearblocks.io/address/brambleford.testnet).
+
+| | |
+|---|---|
+| ![The shop street by day](docs/town-day.jpg) | ![A shop panel showing prices and the shopkeeper's own plan](docs/shop-plan.jpg) |
+| ![The time-lapse: a week of prices charted in a minute](docs/time-lapse.jpg) | ![The square at night](docs/title-night.jpg) |
 
 ## What NEAR does here
 
@@ -34,9 +40,27 @@ The contract has no copy of the rules. It imports `src/economy/town.ts` and
 and the chain cannot disagree. Coins are never created or destroyed: they move
 between shops, townsfolk and players, and the tests check the total every time.
 
+## 0. Play the hosted game (1 minute, nothing to install)
+
+1. Open https://brambleford.vercel.app and press any key.
+   **See:** under the buttons at the top left, `NEAR testnet · g….brambleford-folk.testnet · saved`.
+   That `g…` name is a NEAR account that was just created for your browser.
+2. Follow the goal at the top of the screen: walk left to the grey mine yard,
+   press **E** next to a rock a few times, then walk to the red-haired
+   blacksmith, press **E** and press **Sell all**. **See:** the status text
+   reads `saving…` and then `saved`. Each of those was a transaction on testnet
+   that you did not pay for.
+3. Press **T**. **See:** the time-lapse described in section 1, step 7.
+
+If a shop is boarded up with a CLOSED sign, that is the economy at work: it
+missed rent twice. It reopens if a player buys in for 100 coins, or after three
+days when the townsfolk club together.
+
 ## 1. Play it with no chain (1 minute)
 
-Requires Node 20 or newer.
+Requires Node 20 or newer (built and tested on Node 22.22.3). On Node older
+than 22.22.2, `npm install` prints an engine warning for near-api-js; the steps
+in sections 1 and 2 do not use it.
 
 1. `npm install`
 2. `npm run dev`, then open the address it prints. Press any key at the title.
@@ -72,7 +96,7 @@ step 1 installs quickly.
 1. `npm run setup:contract` installs the contract's tools (near-sdk-js, near-workspaces).
 2. `npm run build:contract` builds `contract/build/brambleford.wasm`.
 3. `npm run test:contract` deploys it to a local sandbox and plays a short game.
-   **See:** 21 lines starting `PASS`, then `All checks passed`. They cover
+   **See:** 23 lines starting `PASS`, then `All checks passed`. They cover
    joining, gathering, selling, buying, eating, conservation of coins, the
    shopkeeper-only `set_plan`, NEP-245 transfers, and the hourly tick with its gas use.
 4. `npm run sandbox` starts a sandbox chain with the town deployed and leaves it
@@ -116,13 +140,18 @@ last visitor.
 - **`mt_transfer_call` and `mt_batch_transfer_call`** from NEP-245 are not
   implemented. Core views, `mt_transfer` and `mt_batch_transfer` are.
 - **NEAR Intents** is not used.
-- **The hosted back end has not been load-tested**, and one relayer account
+- **The hosted game has not been load-tested**, and one relayer account
   signs everything, so many simultaneous players would queue.
 - **Balance.** Coins a player hoards leave circulation. With many long-term
   players the townsfolk's purse would run low.
 - **Cost.** The contract is JavaScript (near-sdk-js), so each call burns about
   15 TGas before doing anything. Keeping the town ticking costs the relayer
-  roughly 0.6 to 0.8 testnet NEAR per hour of active play.
+  roughly 0.6 to 0.8 testnet NEAR per hour of active play. A tab nobody has
+  touched for three minutes stops nudging the clock, and the town catches up
+  when someone plays again.
+- **Abuse limits are light.** The relayer only pays for one ordinary game
+  action per request, and requests are rate-limited per address in memory,
+  which slows a script down but does not stop a determined one.
 
 ## Deploying your own town
 
@@ -130,7 +159,9 @@ last visitor.
 shopkeepers and the purse as sub-accounts) and `<name>-folk.testnet` (the
 relayer) from the testnet faucet, deploys, starts the town and writes
 `.env.testnet`. `npm run dev:testnet` plays against it. `npm run host` puts the
-game on Vercel with those settings (after `vercel login`).
+game on Vercel with those settings (after `vercel login` and
+`vercel link --yes --project <name>`). It deploys from a clean copy, so the
+keys file is never uploaded.
 
 ## Where things are
 
@@ -148,7 +179,7 @@ game on Vercel with those settings (after `vercel login`).
 
 ## How this was built
 
-Written from scratch between 9 and 13 November 2026, inside the hackathon
+Written from scratch between 9 and 14 November 2026, inside the hackathon
 window, with AI coding assistance (Claude Code). Libraries:
 [Phaser 3](https://phaser.io) (MIT), Vite, TypeScript,
 [near-sdk-js](https://github.com/near/near-sdk-js), near-api-js and

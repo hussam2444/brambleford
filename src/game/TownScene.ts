@@ -172,8 +172,12 @@ export class TownScene extends Phaser.Scene {
 
     const kb = this.input.keyboard!;
     this.keys = kb.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT') as Record<string, Phaser.Input.Keyboard.Key>;
-    kb.on('keydown-E', () => (this.tapped.act = true));
-    kb.on('keydown-SPACE', () => (this.tapped.act = true));
+    // Holding the key keeps gathering, but must not open and shut a shop over and over.
+    const act = (ev: KeyboardEvent) => {
+      if (!ev.repeat || (!this.hud.shopOpen && this.nearest()?.kind === 'node')) this.tapped.act = true;
+    };
+    kb.on('keydown-E', act);
+    kb.on('keydown-SPACE', act);
     kb.on('keydown-ESC', () => (this.tapped.esc = true));
     kb.on('keydown-M', () => this.hud.setMuted(sfx.toggleMute()));
     kb.on('keydown-T', () => (this.lapse ? this.stopLapse() : this.startLapse()));
@@ -447,7 +451,11 @@ export class TownScene extends Phaser.Scene {
         },
       },
       { text: 'Sell it to Bruna, the red-haired blacksmith.', done: (w) => w.player.stats.sold > 0, at: keeper('blacksmith') },
-      { text: 'Hungry work. Buy bread from Odo the baker, then click it in your bag to eat.', done: (w) => w.player.stats.eaten > 0, at: keeper('baker') },
+      {
+        text: 'Hungry work. Buy bread from Odo the baker or smoked fish from Maren, then click it in your bag to eat.',
+        done: (w) => w.player.stats.eaten > 0,
+        at: () => (this.world.town.merchants.baker.open ? keeper('baker')() : keeper('fishmonger')()),
+      },
       { text: 'Save 100 coins and buy into a shop. Its profits pay you every evening.', done: (w) => Object.values(w.town.merchants).some((m) => shareOf(w, m) > 0) },
     ];
   }

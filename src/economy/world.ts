@@ -84,7 +84,9 @@ export class LocalWorld implements GameWorld {
 
   /** Move the town on by one hour right now. */
   tickHour() {
-    Rules.tickHour(this.town, this.rng, (_holder, coins, note) => {
+    Rules.tickHour(this.town, this.rng, (holder, coins, note) => {
+      // In a time-lapse of the shared town, other investors exist too. Their cut is not ours.
+      if (holder !== this.me) { this.town.purse += coins; return; }
       this.player.coins += coins;
       Rules.notify(this.player, note);
     });

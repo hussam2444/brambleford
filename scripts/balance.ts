@@ -6,13 +6,16 @@ import { GOODS } from '../src/economy/goods';
 
 const runs = 40, days = 14;
 let closures = 0, runsWithClosure = 0;
+// (a shop that shuts reopens after a few days, so closures are counted as they happen)
 const spread: Record<string, number[]> = {};
 for (let seed = 1; seed <= runs; seed++) {
   const w = new LocalWorld(seed);
   const lo: Record<string, number> = {}, hi: Record<string, number> = {};
   const start = w.totalCoins();
+  let shut = 0, lastSeq = 0;
   for (let h = 0; h < days * 24; h++) {
     w.tickHour();
+    for (const e of w.town.events) if (e.seq > lastSeq) { lastSeq = e.seq; if (e.kind === 'closed') shut += 1; }
     for (const m of Object.values(w.town.merchants)) {
       if (!m.open) continue;
       const p = quoteSell(m, m.recipe.output).price / GOODS[m.recipe.output].base;
@@ -21,7 +24,6 @@ for (let seed = 1; seed <= runs; seed++) {
     }
   }
   if (w.totalCoins() !== start) throw new Error('coins not conserved');
-  const shut = (Object.keys(w.town.merchants) as MerchantId[]).filter((id) => !w.town.merchants[id].open).length;
   closures += shut;
   if (shut) runsWithClosure += 1;
   for (const id of Object.keys(lo)) (spread[id] ??= []).push(hi[id] - lo[id]);

@@ -45,6 +45,8 @@ export interface Merchant {
   upkeep: number;
   missedRent: number;
   open: boolean;
+  /** The day the shop shut, while it is shut. */
+  closedOn?: number;
   /** Percent of each day's profit owed to each investor, by player id. */
   holders: Record<string, number>;
   coinsAtDawn: number;
@@ -117,6 +119,9 @@ export const TOWN = {
   hourMs: { day: 9000, night: 2500 },
   /** Days of unpaid rent before a shop shuts. */
   missedRentLimit: 2,
+  /** If no player invests in a shut shop, the townsfolk put in this much after this many days. */
+  daysUntilWhipRound: 3,
+  whipRound: 150,
   /** What a newcomer is given from the townsfolk's purse. */
   startingCoins: 20,
   investCost: 100,
@@ -261,6 +266,13 @@ export function totalCoins(town: Town, players: Player[]): number {
   return sum;
 }
 
+/** Look a shop up by id. Anything that is not one of the four ids finds nothing. */
+function shopOf(town: Town, id: MerchantId): Merchant | undefined {
+  return MERCHANT_IDS.includes(id) ? town.merchants[id] : undefined;
+}
+
+const owns = (bag: object, key: string) => Object.prototype.hasOwnProperty.call(bag, key);
+
 function add(bag: Partial<Record<GoodId, number>>, good: GoodId, n: number) {
   bag[good] = Math.max(0, (bag[good] ?? 0) + n);
 }
@@ -353,6 +365,7 @@ function closeOfDay(town: Town, pay: Pay) {
       m.missedRent += 1;
       if (m.missedRent >= TOWN.missedRentLimit) {
         m.open = false;
+        m.closedOn = town.day;
         announce(town, 'closed', `${m.name} the ${m.title.toLowerCase()} has shut up shop. Rent went unpaid ${TOWN.missedRentLimit} days running.`);
         continue;
       }
@@ -387,6 +400,16 @@ const SEASONS: Omit<Season, 'daysLeft'>[] = [
 ];
 
 function dawn(town: Town, rng: Rng) {
+  // A shop nobody has rescued does not stay shut for ever: after a few days the
+  // townsfolk club together, out of their own purse, and it opens again.
+  for (const m of Object.values(town.merchants)) {
+    if (m.open || town.day - (m.closedOn ?? 0) < TOWN.daysUntilWhipRound || town.purse < TOWN.whipRound) continue;
+    town.purse -= TOWN.whipRound;
+    m.coins += TOWN.whipRound;
+    m.open = true;
+    m.missedRent = 0;
+    announce(town, 'reopened', `The townsfolk clubbed together and ${m.name} the ${m.title.toLowerCase()} is open again.`);
+  }
   for (const m of Object.values(town.merchants)) {
     m.coinsAtDawn = m.coins;
     // Some days the town wants bread; some days nobody does. No two days are alike.
@@ -410,7 +433,7 @@ function dawn(town: Town, rng: Rng) {
 // ── What a player can do ────────────────────────────────────────────────────
 
 export function gather(town: Town, p: Player, good: GoodId): ActionResult {
-  if (!GOODS[good]?.raw) return { ok: false, message: 'That cannot be gathered.' };
+  if (!owns(GOODS, good) || !GOODS[good].raw) return { ok: false, message: 'That cannot be gathered.' };
   rest(town, p);
   if (p.energy < TOWN.gatherEnergy) return { ok: false, message: "You're worn out. Eat something, or rest until morning." };
   const n = gatherYield(p);
@@ -422,10 +445,10 @@ export function gather(town: Town, p: Player, good: GoodId): ActionResult {
 
 /** Sell up to `amount` of something to a shop, one at a time, so each sale moves the next price. */
 export function sell(town: Town, p: Player, merchantId: MerchantId, good: GoodId, amount = 1): ActionResult {
-  const m = town.merchants[merchantId];
+  const m = shopOf(town, merchantId);
   if (!m) return { ok: false, message: 'No such shop.' };
   if (!isTradingHour(town)) return { ok: false, message: `${m.name} has gone to bed.` };
-  if (!(good in m.usualSupply)) return { ok: false, message: `${m.name} has no use for ${GOODS[good]?.plural ?? 'that'}.` };
+  if (!owns(m.usualSupply, good)) return { ok: false, message: `${m.name} has no use for ${GOODS[good]?.plural ?? 'that'}.` };
   if ((p.inventory[good] ?? 0) < 1) return { ok: false, message: `You have no ${GOODS[good].plural}.` };
 
   let count = 0, total = 0, stop = '';
@@ -445,7 +468,7 @@ export function sell(town: Town, p: Player, merchantId: MerchantId, good: GoodId
 }
 
 export function buy(town: Town, p: Player, merchantId: MerchantId, good: GoodId): ActionResult {
-  const m = town.merchants[merchantId];
+  const m = shopOf(town, merchantId);
   if (!m) return { ok: false, message: 'No such shop.' };
   if (!isTradingHour(town)) return { ok: false, message: `${m.name} has gone to bed.` };
   if (m.recipe.output !== good) return { ok: false, message: `${m.name} does not sell that.` };
@@ -462,7 +485,7 @@ export function buy(town: Town, p: Player, merchantId: MerchantId, good: GoodId)
 }
 
 export function eat(town: Town, p: Player, good: GoodId): ActionResult {
-  const energy = GOODS[good]?.energy;
+  const energy = owns(GOODS, good) ? GOODS[good].energy : undefined;
   if (!energy || (p.inventory[good] ?? 0) < 1) return { ok: false, message: 'Nothing to eat.' };
   rest(town, p);
   add(p.inventory, good, -1);
@@ -473,7 +496,7 @@ export function eat(town: Town, p: Player, good: GoodId): ActionResult {
 
 /** Put coins into a shop for a share of its profits. Reopens it if it had closed. */
 export function invest(town: Town, p: Player, playerId: string, merchantId: MerchantId): ActionResult {
-  const m = town.merchants[merchantId];
+  const m = shopOf(town, merchantId);
   if (!m) return { ok: false, message: 'No such shop.' };
   if (investedPct(m) + TOWN.investPct > TOWN.maxInvestedPct) return { ok: false, message: `${m.name} won't part with any more of the shop.` };
   if (p.coins < TOWN.investCost) return { ok: false, message: `You need ${TOWN.investCost} coins to buy in.` };
@@ -495,7 +518,7 @@ export function invest(town: Town, p: Player, playerId: string, merchantId: Merc
  */
 export function setPlan(town: Town, m: Merchant, target: Partial<Record<GoodId, number>>, plan: string): ActionResult {
   for (const [id, n] of Object.entries(target)) {
-    if (!(id in m.target)) return { ok: false, message: `${m.name} does not stock ${id}.` };
+    if (!owns(m.target, id)) return { ok: false, message: `${m.name} does not stock ${id}.` };
     if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > 40) return { ok: false, message: 'Shelf targets must be whole numbers from 1 to 40.' };
   }
   Object.assign(m.target, target);

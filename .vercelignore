@@ -1,0 +1,7 @@
+.env*
+!.env.example
+submission-notes.md
+contract
+dist
+docs
+.claude

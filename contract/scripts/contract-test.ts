@@ -92,6 +92,10 @@ try {
   check('a transfer without 1 yoctoNEAR is refused', !r.ok);
   r = await play(alice, 'mt_transfer', { receiver_id: bob.accountId, token_id: 'coin', amount: '5' }, '1');
   check('a standard transfer moves coins between players', r.ok && (await view('mt_balance_of', { account_id: bob.accountId, token_id: 'coin' })) === '25', r.error);
+  r = await play(alice, 'mt_transfer', { receiver_id: bob.accountId, token_id: 'constructor', amount: '5' }, '1');
+  check('a made-up token id is refused', !r.ok && (await view('mt_balance_of', { account_id: bob.accountId, token_id: 'constructor' })) === '0' && (await view('mt_supply', { token_id: 'constructor' })) === null);
+  r = await play(alice, 'sell', { merchant: '__proto__', good: 'ore' });
+  check('a made-up shop id is refused without breaking anything', r.ok ? r.value.ok === false : true, r.value?.message ?? 'refused');
   r = await play(alice, 'mt_transfer', { receiver_id: shop.baker.accountId, token_id: 'coin', amount: '1' }, '1');
   check('players cannot push coins into a shop', !r.ok);
 

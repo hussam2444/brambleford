@@ -19,6 +19,7 @@ const CONTRACT = import.meta.env.VITE_NEAR_CONTRACT_ID as string | undefined;
 const RPC = (import.meta.env.VITE_NEAR_RPC_URL as string | undefined) ?? 'https://test.rpc.fastnear.com';
 const NETWORK = (import.meta.env.VITE_NEAR_NETWORK as string | undefined) ?? 'testnet';
 const POLL_MS = 1500;
+const IDLE_AFTER_MS = 3 * 60 * 1000;
 
 interface Snapshot {
   town: Town;
@@ -78,6 +79,10 @@ export class ChainWorld implements GameWorld {
   private busy = false;
   private ticking = false;
   private lastTickTry = 0;
+  /** When the player last touched the keyboard or mouse. A tab left alone stops nudging the clock. */
+  private lastInput = Date.now();
+  /** True from a failed send until the next read from the chain is applied. */
+  private lost = false;
   /** Counts the player's own actions, so a read that started before one is not applied after it. */
   private version = 0;
   private pollIn = POLL_MS;
@@ -89,6 +94,9 @@ export class ChainWorld implements GameWorld {
 
   constructor(private account: Account, private provider: JsonRpcProvider, private contractId: string) {
     this.me = account.accountId;
+    for (const ev of ['keydown', 'pointerdown', 'pointermove']) {
+      window.addEventListener(ev, () => (this.lastInput = Date.now()), { passive: true });
+    }
   }
 
   async begin() {
@@ -107,8 +115,10 @@ export class ChainWorld implements GameWorld {
 
   status() {
     const where = NETWORK === 'sandbox' ? 'Local NEAR sandbox' : `NEAR ${NETWORK}`;
-    const name = this.me.length > 30 ? `${this.me.slice(0, 9)}…${this.me.slice(-14)}` : this.me;
-    return `${where} · ${name} · ${this.busy || this.queue.length ? 'saving…' : 'saved'}`;
+    // g57748bfc….brambleford-folk.testnet: the start of the player's own name, then the account that made it
+    const dot = this.me.indexOf('.');
+    const name = dot > 10 ? `${this.me.slice(0, 9)}…${this.me.slice(dot)}` : this.me;
+    return `${where} · ${name} · ${this.busy || this.queue.length ? 'saving…' : this.lost ? 'reconnecting…' : 'saved'}`;
   }
 
   // ── Reading ───────────────────────────────────────────────────────────────
@@ -120,6 +130,7 @@ export class ChainWorld implements GameWorld {
   }
 
   private apply(snap: Snapshot) {
+    this.lost = false;
     this.town = snap.town;
     this.player = snap.player!;
     this.nextTickAt = snap.next_tick_at;
@@ -153,8 +164,11 @@ export class ChainWorld implements GameWorld {
       this.pollIn = POLL_MS;
       void this.refresh();
     }
-    // When an hour is due, ask the relayer to nudge the town's clock.
-    if (idle && !this.ticking && this.chainNow() >= this.nextTickAt && Date.now() - this.lastTickTry > 1500) {
+    // When an hour is due, ask the relayer to nudge the town's clock. Each nudge costs the
+    // relayer gas, so a tab nobody has touched for a few minutes stops asking. The town
+    // catches up the moment anyone plays again.
+    const present = Date.now() - this.lastInput < IDLE_AFTER_MS;
+    if (idle && present && !this.ticking && this.chainNow() >= this.nextTickAt && Date.now() - this.lastTickTry > 1500) {
       this.ticking = true;
       this.lastTickTry = Date.now();
       post('tick').catch(() => {}).then(() => this.refresh()).finally(() => (this.ticking = false));
@@ -203,6 +217,7 @@ export class ChainWorld implements GameWorld {
         if (result && result.ok === false) this.extraNews.push(`The town saw that differently: ${result.message}`);
       } catch {
         this.queue.length = 0;
+        this.lost = true;
         this.extraNews.push('Lost touch with the town for a moment. Catching up.');
       }
     }

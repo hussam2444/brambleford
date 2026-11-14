@@ -296,6 +296,7 @@ export class Brambleford {
   // `mt_batch_transfer_call` are not.
 
   private balance(account: string, token: string): number {
+    if (!this.tokenExists(token)) return 0;
     if (token.startsWith(SHARE)) {
       const m = this.town.merchants[token.slice(SHARE.length) as MerchantId];
       return m?.holders[account] ?? 0;
@@ -312,7 +313,13 @@ export class Brambleford {
   }
 
   private tokenExists(token: string): boolean {
-    return token === COIN || token in GOODS || (token.startsWith(SHARE) && token.slice(SHARE.length) in this.town.merchants);
+    // Checked against the lists of real ids, never with `in`, so names every
+    // JavaScript object has (such as "constructor") are not mistaken for tokens.
+    return (
+      token === COIN ||
+      GOOD_IDS.includes(token as GoodId) ||
+      (token.startsWith(SHARE) && Rules.MERCHANT_IDS.includes(token.slice(SHARE.length) as MerchantId))
+    );
   }
 
   @view({})
