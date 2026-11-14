@@ -126,8 +126,11 @@ export class Brambleford {
     return null;
   }
 
-  /** Run any game hours that have come due since the last call. */
-  private catchUp(maxHours: number): number {
+  /**
+   * Run any game hours that have come due since the last call, `maxHours` at most.
+   * With `thenSleep`, a town still behind after that is taken to have slept, and carries on from now.
+   */
+  private catchUp(maxHours: number, thenSleep = false): number {
     const now = this.now();
     if (now < this.nextTickAt) return 0;
 
@@ -138,7 +141,9 @@ export class Brambleford {
     while (now >= this.nextTickAt && hours < maxHours) {
       Rules.tickHour(this.town, rng, (holder, coins, note, from) => {
         const p = this.loadPlayer(holder);
-        if (!p) { this.town.purse += coins; return; }
+        // A part-owner who has been away for days leaves their cut with the townsfolk, who
+        // spend it in town. They keep their share, and are paid again once they are back.
+        if (!p || this.town.day - p.restedOn > Rules.TOWN.partnerAwayDays) { this.town.purse += coins; return; }
         p.coins += coins;
         Rules.notify(p, note);
         this.savePlayer(holder, p);
@@ -149,7 +154,7 @@ export class Brambleford {
       hours += 1;
     }
     // If the town was left alone for a long while, it slept: carry on from now.
-    if (now >= this.nextTickAt && hours >= CATCH_UP.onTick) this.nextTickAt = now + Rules.hourMs(this.town);
+    if (thenSleep && now >= this.nextTickAt && hours >= maxHours) this.nextTickAt = now + Rules.hourMs(this.town);
 
     const after = this.stockTotals();
     for (const g of GOOD_IDS) this.supply[g] = (this.supply[g] ?? 0) + (after[g] ?? 0) - (before[g] ?? 0);
@@ -165,6 +170,7 @@ export class Brambleford {
     const me = near.predecessorAccountId();
     this.catchUp(CATCH_UP.duringAction);
     const p = this.welcome(me);
+    Rules.rest(this.town, p); // also marks today as a day this player was in town
     const result = run(me, p);
     this.savePlayer(me, p);
     this.rank(me, p);
@@ -178,10 +184,15 @@ export class Brambleford {
 
   // ── The game ──────────────────────────────────────────────────────────────
 
-  /** Anyone may nudge the clock. Does nothing if no hour is due yet. */
+  /**
+   * Anyone may nudge the clock. Does nothing if no hour is due yet.
+   * `hours` is the most overdue hours to work through in this call: 36 unless a smaller
+   * number is given. If more than that were due, the town slept, and carries on from now.
+   */
   @call({})
-  tick(): { hours: number; day: number; hour: number } {
-    const hours = this.catchUp(CATCH_UP.onTick);
+  tick(args?: { hours?: number }): { hours: number; day: number; hour: number } {
+    const most = Math.max(1, Math.min(CATCH_UP.onTick, Math.floor(Number(args?.hours) || CATCH_UP.onTick)));
+    const hours = this.catchUp(most, true);
     return { hours, day: this.town.day, hour: this.town.hour };
   }
 

@@ -94,6 +94,15 @@ function say(text: string) {
 /** Google has said who this is. Ask the back end for that person's account, with this browser's key on it. */
 async function signIn(credential: string | undefined) {
   if (!credential || busy) return;
+  // Without storage this browser makes a new key on every load, and the game could not
+  // remember the sign-in anyway. Say so before the back end is asked to add a key nobody keeps.
+  try {
+    localStorage.setItem(`${slot()}:check`, '1');
+    localStorage.removeItem(`${slot()}:check`);
+  } catch {
+    say('This browser will not let the game remember you, so signing in cannot work here.');
+    return;
+  }
   busy = true;
   say('Signing you in…');
   try {

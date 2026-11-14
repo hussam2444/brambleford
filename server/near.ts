@@ -99,6 +99,8 @@ export async function join(env: ServerEnv, body: { publicKey?: string; googleCre
 async function joinWithGoogle(env: ServerEnv, body: { publicKey?: string; googleCredential?: string }, who: string) {
   const clientId = env.GOOGLE_CLIENT_ID?.trim();
   if (!clientId) throw new HttpError(503, 'Signing in with Google is not set up on this server.');
+  // Each try is a question to Google, so one address may not ask without end.
+  if (!allow('google', who)) throw new HttpError(429, 'Too many sign-ins from this address. Try again later.');
   const check = await checkGoogleCredential(String(body.googleCredential), clientId);
   if (!check.ok) throw new HttpError(401, check.reason);
   return joinWithIdentity(env, String(body.publicKey), check.sub, who);
@@ -230,16 +232,25 @@ function innerResult(outcome: { receipts_outcome?: { outcome: { status: unknown 
 }
 
 /**
+ * How far one call from the host's timer moves an empty town. A tab that is
+ * being played asks for every hour as it falls due. The timer comes round every
+ * ten minutes and finds dozens of hours waiting: it runs these few and lets the
+ * rest go, so an empty town ambles through about a day every hour and a half
+ * instead of racing through months, and costs the relayer very little.
+ */
+export const TIMER_HOURS = 3;
+
+/**
  * Run any game hours that have come due. Cheap to call early: it checks first.
  * A player's tab calls this while they play. The host's timer calls it every
- * few minutes as well (the schedule is in `vercel.json`), so the town keeps
- * its hours with nobody there.
+ * few minutes as well (the schedule is in `vercel.json`, and `byTimer` is true),
+ * so the town keeps its hours with nobody there.
  */
-export async function tick(env: ServerEnv) {
+export async function tick(env: ServerEnv, byTimer = false) {
   const { provider, relayer, contractId } = setup(env);
   const state = await provider.callFunction<{ now: number; next_tick_at: number }>({ contractId, method: 'get_town', args: {} });
   if (state && state.now + 1500 < state.next_tick_at) return { hours: 0, skipped: true };
-  const result = await relayer.callFunction<{ hours: number }>({ contractId, methodName: 'tick', args: {}, gas: teraToGas(300) });
+  const result = await relayer.callFunction<{ hours: number }>({ contractId, methodName: 'tick', args: byTimer ? { hours: TIMER_HOURS } : {}, gas: teraToGas(300) });
   const planned = await planOne(env).catch(() => null); // a shopkeeper's plan must never hold up the clock
   return { ...result, skipped: false, planned };
 }
@@ -579,6 +590,12 @@ export async function submitPlan(env: ServerEnv, id: string, target: Record<stri
  * restart, a shopkeeper who was content may be asked once more.
  */
 const askedOn = new Map<string, number>();
+/**
+ * The game day on which each shopkeeper last sent a plan from here. Nudges that
+ * arrive in the same second all read the town before any plan has landed, and
+ * without this each of them would send one.
+ */
+const sentOn = new Map<string, number>();
 
 /** The shopkeepers, with a different one first each day, so that at one plan per call nobody is always last. */
 function inTurn<T>(shops: T[], day: number): T[] {
@@ -601,8 +618,11 @@ async function planOne(env: ServerEnv) {
     if (!m.open || (m.plannedOn ?? 0) >= day || !env[`NEAR_KEY_${m.id.toUpperCase()}`]) continue;
     if (byModel && askedOn.get(m.id) === day) continue;
     if (byModel) askedOn.set(m.id, day);
+    if (sentOn.get(m.id) === day) continue; // another nudge is already seeing to this one
     const change = await think(env, m, season);
     if (change) {
+      if (sentOn.get(m.id) === day) return null; // one was sent while the model was thinking
+      sentOn.set(m.id, day);
       const sent = await submitPlan(env, m.id, change.target, change.plan, change.thinker);
       const refused = (sent.result as { ok?: boolean } | null)?.ok === false;
       return refused ? null : { shop: m.id, plan: change.plan, thinker: change.thinker, transaction: sent.transaction };
@@ -619,6 +639,7 @@ async function planOne(env: ServerEnv) {
 
 const LIMITS: Record<string, { max: number; perMs: number }> = {
   join: { max: 20, perMs: 60 * 60 * 1000 },
+  google: { max: 30, perMs: 60 * 1000 },
   relay: { max: 90, perMs: 60 * 1000 },
   tick: { max: 90, perMs: 60 * 1000 },
 };
@@ -639,14 +660,17 @@ export function allow(route: string, who: string): boolean {
   return entry.count <= limit.max;
 }
 
-/** One entry point for every route, used by both the dev server and the hosted functions. */
-export async function handle(route: string, body: unknown, env: ServerEnv, who = 'local'): Promise<{ status: number; json: unknown }> {
+/**
+ * One entry point for every route, used by both the dev server and the hosted functions.
+ * `method` is the HTTP method. Only the clock answers GET, and a GET is the host's timer.
+ */
+export async function handle(route: string, body: unknown, env: ServerEnv, who = 'local', method = 'POST'): Promise<{ status: number; json: unknown }> {
   if (route !== 'join' && !allow(route, who)) return { status: 429, json: { error: 'Too many requests. Try again in a moment.' } };
   try {
     const data = (body ?? {}) as Record<string, string>;
     if (route === 'join') return { status: 200, json: await join(env, data, who) };
     if (route === 'relay') return { status: 200, json: await relay(env, data) };
-    if (route === 'tick') return { status: 200, json: await tick(env) };
+    if (route === 'tick') return { status: 200, json: await tick(env, method === 'GET') };
     return { status: 404, json: { error: 'No such route.' } };
   } catch (err) {
     const status = err instanceof HttpError ? err.status : 500;

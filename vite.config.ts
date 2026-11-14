@@ -14,7 +14,7 @@ function api(): Plugin {
         const { handle, methodAllowed } = await server.ssrLoadModule('/server/near.ts');
         const route = (req.url ?? '').split('?')[0].replace(/^\//, '');
         // The same rule as the hosted entry point: POST, or a GET for the clock.
-        const { status, json } = methodAllowed(route, req.method) ? await handle(route, body, env, req.socket.remoteAddress ?? 'local') : { status: 405, json: { error: 'Use POST.' } };
+        const { status, json } = methodAllowed(route, req.method) ? await handle(route, body, env, req.socket.remoteAddress ?? 'local', req.method) : { status: 405, json: { error: 'Use POST.' } };
         res.statusCode = status;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(json));

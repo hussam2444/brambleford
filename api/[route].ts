@@ -10,6 +10,6 @@ export default async function handler(req: Req, res: Res) {
   if (!methodAllowed(route, req.method)) return res.status(405).json({ error: 'Use POST.' });
   res.setHeader('Cache-Control', 'no-store'); // an answer kept by a cache would leave the timer nudging nothing
   const who = String(req.headers['x-forwarded-for'] ?? 'unknown').split(',')[0].trim();
-  const { status, json } = await handle(route, req.body, process.env as ServerEnv, who);
+  const { status, json } = await handle(route, req.body, process.env as ServerEnv, who, req.method);
   res.status(status).json(json);
 }

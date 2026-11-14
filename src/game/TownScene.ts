@@ -616,7 +616,10 @@ export class TownScene extends Phaser.Scene {
     }
     if (this.hud.boardOpen) {
       this.player.anims.stop();
-      if (esc || act) this.hud.closeBoard();
+      if (esc || act) {
+        this.hud.closeBoard();
+        this.lastGather = time; // the same press of E must not also swing at whatever is beside the player
+      }
       return;
     }
     if (esc) {

@@ -193,7 +193,7 @@ export class ChainWorld implements GameWorld {
 
   startOverNote() {
     // [google sign-in] A signed-in player is not left behind for good: signing in again goes back to them.
-    if (googleAccount() === this.me) return 'You get a brand new guest player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. This signs you out. Your signed-in player keeps everything they own, and signing in again takes you back to them.';
+    if (googleAccount() === this.me) return 'You get a brand new guest player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. This signs you out. Your signed-in player keeps everything they own, and signing in again takes you back to them. The guest player that was waiting in this browser is left behind for good.';
     return 'You get a brand new player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. Your old player and everything they own stay behind for good.';
   }
 
@@ -319,7 +319,16 @@ export class ChainWorld implements GameWorld {
     if (behind && method !== 'gather' && method !== 'eat' && (this.ticking || Date.now() - this.lastTickTry > 4000)) {
       return { ok: false, message: 'The town is just waking up. Try again in a moment.' };
     }
+    // The rules also write the town's news and the player's notices as they go. Here they
+    // are only a guess at what the chain will say, and the guess can be wrong: someone else
+    // may have filled the order a moment ago. So the page's own lines are taken back out,
+    // and news is only ever told by the chain, on the next read a second or two later.
+    const eventSeq = this.town.eventSeq, noticeSeq = this.player.noticeSeq;
     const result = locally();
+    this.town.events = this.town.events.filter((e) => e.seq <= eventSeq);
+    this.town.eventSeq = eventSeq;
+    this.player.notices = this.player.notices.filter((n) => n.seq <= noticeSeq);
+    this.player.noticeSeq = noticeSeq;
     if (!result.ok) return result;
     this.version += 1;
     const last = this.queue[this.queue.length - 1];

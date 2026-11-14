@@ -112,6 +112,16 @@ try {
   r = await play(bob, 'tick');
   check('a second nudge straight away does nothing', r.ok && r.value.hours <= 1, `gas ${r.gas} TGas`);
 
+  // The host's timer asks for a few hours only, so an empty town ambles instead of racing.
+  await worker.provider.fastForward(400);
+  r = await play(bob, 'tick', { hours: 2 });
+  check('a nudge can ask for a few hours only', r.ok && r.value.hours === 2, `${r.value?.hours} hours, gas ${r.gas} TGas`);
+  r = await play(bob, 'tick');
+  check('and the hours it left behind are let go: the town carries on from now', r.ok && r.value.hours <= 1, `${r.value?.hours} hours`);
+  r = await play(bob, 'tick', { hours: 'lots' });
+  const odd = await play(bob, 'tick', { hours: -5 });
+  check('a nonsense number of hours is no trouble', r.ok && odd.ok && r.value.hours <= 1 && odd.value.hours <= 1);
+
   // ── Wanted orders, standing, and who thought a plan through ───────────────
 
   /** Let a town run on until its shops have just opened, on a day after `after`, when the day's orders are fresh on the board. */
@@ -214,7 +224,53 @@ try {
     dividend = (await view('get_player', { account_id: alice.accountId })).notices.find((n: any) => n.text.startsWith('Tobin paid you'));
   }
   check('"richest" keeps up when a shop pays an investor', (await listed()) === (await worthOf(alice, 25)), dividend ? dividend.text : 'the carpenter made no profit to share in that time');
-  c = await coinsEverywhere([alice, bob, ...friends]);
+
+  // A part-owner who goes away. Dora buys in too and comes by every day; Alice does nothing more.
+  // Once Alice has been gone more than three days her cut goes to the townsfolk, not to her.
+  const dora = await root.createSubAccount('dora');
+  await play(dora, 'join');
+  for (let i = 0; i < 6 && (await coinsOf(dora)) < 100; i++) {
+    const friend = await root.createSubAccount(`pal${i}`);
+    friends.push(friend);
+    await play(friend, 'join');
+    await play(friend, 'mt_transfer', { receiver_id: dora.accountId, token_id: 'coin', amount: '20' }, '1');
+  }
+  r = await play(dora, 'invest', { merchant: 'carpenter' });
+  const person = async (who: NearAccount) => (await view('get_player', { account_id: who.accountId })) as { coins: number; noticeSeq: number; restedOn: number };
+  const aliceLastSeen = (await person(alice)).restedOn;
+  const dayNow = async () => (await view('get_town')).town.day as number;
+  /** One more day or so of town life, with Dora dropping by. */
+  const aDayWithDora = async () => {
+    await worker.provider.fastForward(150);
+    await play(bob, 'tick');
+    await play(dora, 'gather', { good: 'wood', times: 1 });
+  };
+  for (let i = 0; i < 12 && (await dayNow()) - aliceLastSeen <= 4; i++) await aDayWithDora();
+  const aliceAway = await person(alice);
+  const doraThen = await person(dora);
+  for (let i = 0; i < 4; i++) await aDayWithDora();
+  const aliceStill = await person(alice);
+  const doraPaid = (await person(dora)).noticeSeq - doraThen.noticeSeq;
+  check('a part-owner who has been away for days is paid nothing more', r.ok && r.value.ok && (await dayNow()) - aliceLastSeen > 7 && aliceStill.coins === aliceAway.coins && aliceStill.noticeSeq === aliceAway.noticeSeq,
+    doraPaid > 0 ? `while Dora, who came by each day, was paid ${doraPaid} time(s)` : 'the carpenter made no profit in those days, so this could not be told apart');
+  check('she still owns her share', (await view('mt_balance_of', { account_id: alice.accountId, token_id: 'share:carpenter' })) === '25');
+  c = await coinsEverywhere([alice, bob, dora, ...friends]);
+  check('her cut went to the townsfolk: every coin is still accounted for', c.sum === c.supply, `${c.sum} of ${c.supply}`);
+  // Alice comes back, and both of them drop by each day. A day that pays Dora must now pay Alice too.
+  await play(alice, 'gather', { good: 'wood', times: 1 });
+  const doraAtReturn = await person(dora);
+  let alicePaidAgain = 0, doraPaidAgain = 0;
+  for (let i = 0; i < 8 && !doraPaidAgain; i++) {
+    await worker.provider.fastForward(60);
+    await play(bob, 'tick');
+    await play(alice, 'gather', { good: 'wood', times: 1 });
+    await play(dora, 'gather', { good: 'wood', times: 1 });
+    alicePaidAgain = (await person(alice)).noticeSeq - aliceStill.noticeSeq;
+    doraPaidAgain = (await person(dora)).noticeSeq - doraAtReturn.noticeSeq;
+  }
+  check('and is paid again once she is back', alicePaidAgain >= doraPaidAgain,
+    doraPaidAgain ? `Alice was paid ${alicePaidAgain} time(s) and Dora ${doraPaidAgain}` : 'the carpenter made no profit after her return, so this could not be told');
+  c = await coinsEverywhere([alice, bob, dora, ...friends]);
   check('coins are still conserved at the end of it all', c.sum === c.supply, `${c.sum} of ${c.supply}`);
 
   // ── Rehearsing an upgrade of a town that is already live ──────────────────

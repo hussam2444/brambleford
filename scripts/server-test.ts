@@ -20,7 +20,7 @@ import { KeyPair, decodeSignedTransaction } from 'near-api-js';
 import * as Rules from '../src/economy/town';
 import handler from '../api/[route]';
 import {
-  BACKUP_TIMEOUT_MS, HOUSE_RULES, MODEL_TIMEOUT_MS, PLAN_LIMITS, allow, booksFor, decide, handle, methodAllowed, readReply, submitPlan, think, thinkerName,
+  BACKUP_TIMEOUT_MS, HOUSE_RULES, MODEL_TIMEOUT_MS, PLAN_LIMITS, TIMER_HOURS, allow, booksFor, decide, handle, methodAllowed, readReply, submitPlan, think, thinkerName,
   type ServerEnv, type Shop,
 } from '../server/near';
 
@@ -89,7 +89,8 @@ function land(signed: string): object {
   });
 
   if (action.functionCall) { // the relayer calling the contract itself: only ever to nudge the clock
-    chain.sent.push({ by: tx.signerId, paidBy: tx.signerId, to: tx.receiverId, method: action.functionCall.methodName, args: {}, gas: action.functionCall.gas });
+    const said = JSON.parse(Buffer.from(action.functionCall.args).toString() || '{}') as Record<string, unknown>;
+    chain.sent.push({ by: tx.signerId, paidBy: tx.signerId, to: tx.receiverId, method: action.functionCall.methodName, args: said, gas: action.functionCall.gas });
     return done({ hours: 1, day: chain.town.day, hour: chain.town.hour });
   }
 
@@ -124,8 +125,11 @@ function rpc({ method, params, id }: { method: string; params: Record<string, st
 }
 
 const outside: string[] = [];
+/** How many times Google was asked about a sign-in. The stand-in never recognises one. */
+let googleAsked = 0;
 globalThis.fetch = (async (input: unknown, init: RequestInit = {}) => {
   const url = String(input);
+  if (url.startsWith('https://oauth2.googleapis.com/tokeninfo?')) { googleAsked += 1; return json({ error: 'invalid_token' }, 400); }
   if (url === NEAR_AI) {
     const body = JSON.parse(String(init.body)) as ChatRequest;
     ai.calls.push({ method: init.method, headers: init.headers as Record<string, string>, body, signal: init.signal ?? undefined });
@@ -693,6 +697,18 @@ const content: Answer = (body) => chat(JSON.stringify({ target: shopIn(body).tar
   const noKey = await submitPlan({ ...onChain, NEAR_KEY_BAKER: undefined }, 'baker', { bread: bread + 1 }, 'A plan made by hand.').then(() => 'sent', (err: Error) => err.message);
   check('submitPlan refuses when the server does not hold that key', noKey === 'No key for the baker.', noKey);
 
+  // Nudges that arrive in the same second each read the town before any plan has landed.
+  newDay();
+  for (const m of shops()) m.coins = 60; // by the house rules, every shopkeeper now wants to buy in less
+  await Promise.all([nudge(onChain), nudge(onChain), nudge(onChain)]);
+  const signers = plans().map((p) => p.by);
+  check("three nudges at once never send one shopkeeper's plan twice", signers.length >= 1 && new Set(signers).size === signers.length, signers.join(', '));
+  newDay();
+  ai.answer = oneMore;
+  await Promise.all([nudge(onChainWithModel), nudge(onChainWithModel), nudge(onChainWithModel)]);
+  const asked = ai.calls.map((_call, n) => askedAbout(n));
+  check('nor ask the model about one shopkeeper twice', asked.length >= 1 && new Set(asked).size === asked.length && new Set(plans().map((p) => p.by)).size === plans().length, asked.join(', '));
+
   check("every plan the server sent passed the contract's own check", chain.turnedDown === 0, `${chain.turnedDown} turned down`);
 }
 
@@ -728,6 +744,15 @@ heading('Fair use (allow)');
     same('and says why', (await handle('tick', {}, {}, 'a script in a loop')).json, { error: 'Too many requests. Try again in a moment.' });
     clock += 61_000;
     check('a minute later it lets the same address through again', (await handle('tick', {}, {}, 'a script in a loop')).status === 503);
+
+    // Each try at signing in with Google is a question to Google, so those are counted as well.
+    const withGoogle: ServerEnv = { GOOGLE_CLIENT_ID: 'a-client-id.apps.googleusercontent.com' };
+    const tries: number[] = [];
+    googleAsked = 0;
+    for (let i = 0; i < 34; i++) tries.push((await handle('join', { publicKey: 'x', googleCredential: `junk-${i}` }, withGoogle, 'a sign-in loop')).status);
+    check('thirty tries a minute at signing in reach Google, and the rest are refused before they do', tries.slice(0, 30).every((status) => status === 401) && tries.slice(30).every((status) => status === 429) && googleAsked === 30, `${googleAsked} questions to Google`);
+    check('another address can still sign in', (await handle('join', { publicKey: 'x', googleCredential: 'junk' }, withGoogle, 'someone else signing in')).status === 401);
+    check('with no client id set, a sign-in is refused before anything is counted or asked', (await handle('join', { publicKey: 'x', googleCredential: 'junk' }, {}, 'a sign-in loop')).status === 503);
   } finally {
     Date.now = realNow;
   }
@@ -759,9 +784,12 @@ heading('Which routes answer which method');
     newDay();
     let seen = await visit('GET', 'tick');
     check("a GET to /api/tick, which is what the host's timer sends, nudges the clock", seen.status === 200 && seen.json?.skipped === false && ticks().length === 1);
+    same('the timer asks for a few hours only, so an empty town ambles', ticks()[0].args, { hours: TIMER_HOURS });
+    check('and a few means a few', Number.isInteger(TIMER_HOURS) && TIMER_HOURS >= 1 && TIMER_HOURS <= 6);
     check('its answer is marked never to be cached', seen.headers['cache-control'] === 'no-store');
     seen = await visit('POST', 'tick');
     check('a POST to /api/tick works as before', seen.status === 200 && ticks().length === 2);
+    same("a player's tab asks for every hour that is due", ticks()[1].args, {});
 
     for (const route of ['join', 'relay']) {
       const before = chain.requests;

@@ -156,6 +156,12 @@ export const TOWN = {
   /** Percent of profit one investment buys, and the most a shop will ever sell. */
   investPct: 25,
   maxInvestedPct: 75,
+  /**
+   * A part-owner who has done nothing in town for more than this many days is away. While
+   * they are away their cut of the profit goes to the townsfolk, who spend it in town.
+   * Without this, coins pile up out of reach with people who have left, and the town runs dry.
+   */
+  partnerAwayDays: 3,
   /** Anything a shopkeeper holds above this at day's end gets spent back into the town. */
   comfortableSavings: 250,
   gatherEnergy: 2,

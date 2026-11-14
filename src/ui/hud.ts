@@ -211,7 +211,7 @@ export class Hud {
 
   lapseNews(text: string) {
     const w = this.world.town;
-    this.el.lapseLog.insertAdjacentHTML('afterbegin', `<div><b>Day ${this.world.dayNumber()}</b> ${text}</div>`);
+    this.el.lapseLog.insertAdjacentHTML('afterbegin', `<div><b>Day ${this.world.dayNumber()}</b> ${escapeHtml(text)}</div>`);
   }
 
   // ── The Esc menu ──────────────────────────────────────────────────────────
@@ -275,7 +275,7 @@ export class Hud {
   }
 
   news(text: string) {
-    this.el.news.innerHTML = `<b>Town news</b>${text}`;
+    this.el.news.innerHTML = `<b>Town news</b>${escapeHtml(text)}`;
     this.el.news.classList.add('show');
     clearTimeout(this.newsTimer);
     this.newsTimer = window.setTimeout(() => this.el.news.classList.remove('show'), 9000);
@@ -319,7 +319,7 @@ export class Hud {
     const head = `
       <header>
         <img class="face" src="${portraitUrl(m.id)}" alt="" />
-        <div><h2>${m.name}<small>${m.title}</small></h2><p class="says">${m.open && isTradingHour(w) ? `"${this.says(m)}"` : ''}</p></div>
+        <div><h2>${m.name}<small>${m.title}</small></h2><p class="says">${m.open && isTradingHour(w) ? `"${escapeHtml(this.says(m))}"` : ''}</p></div>
         <button class="close" data-act="close"><kbd>Esc</kbd> Leave</button>
       </header>`;
 
@@ -359,7 +359,7 @@ export class Hud {
       <div class="flash ${this.flash.kind}">${this.flash.text}</div>
       <footer>
         <span>${m.name} has ${m.coins} coins in the till.${account?.url ? ` <a href="${account.url}" target="_blank" rel="noopener">The shop's own NEAR account ↗</a>` : ''}<br />
-        ${share ? `You own ${share}% of this shop and get that share of each day's profit.` : 'You own none of this shop yet.'}</span>
+        ${share ? `You own ${share}% of this shop and get that share of each day's profit, on days you are about.` : 'You own none of this shop yet.'}</span>
         <button class="act gold" data-act="invest" ${mayInvest ? '' : 'disabled'}>Buy in · ${TOWN.investCost}</button>
       </footer>`;
     this.el.shop.innerHTML = head + body + foot;

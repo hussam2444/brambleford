@@ -40,7 +40,7 @@ town is live on NEAR testnet at
 | "Bruna's plan" in a shop panel, and who thought it through | Once a day a shopkeeper may change how much it keeps on the shelf. A model on NEAR AI Cloud decides, inside hard limits. The shopkeeper signs with its own key; the contract refuses anyone else, checks the limits again, and stores the plan with the name of whoever decided |
 | A wanted order on the notice board, and a bonus for filling it | The order is part of the town's state in the contract. The bonus moves from the shopkeeper's balance to the player's in the same transaction as the sale, with its own `mt_transfer` event |
 | Your standing, and the richest players in town | Worked out by the contract from balances and shop shares, and kept as a top-ten list in its state |
-| The town carries on while you are away | A timer calls the contract's `tick` every ten minutes. Each call works through up to 36 game hours |
+| The town carries on while you are away | A timer calls the contract's `tick` every ten minutes and moves an empty town three game hours each time |
 | Sign in with Google (optional) | One NEAR account per Google identity. Each browser you sign in on gets its own key on that account, limited to this game's methods |
 | "Why this price" tooltip | The same pricing file the contract runs (`src/economy/pricing.ts`) |
 
@@ -60,7 +60,7 @@ transaction on testnet. Explorer pages open in any browser; nothing to install.
 | Each shopkeeper is its own account and signs its own plan | In the game, a shop panel shows "…'s plan, signed by baker.brambleford.testnet" and links to that account | [`set_plan` signed by `baker.brambleford.testnet`](https://testnet.nearblocks.io/txns/HLbZ3HcaUJuYUs8XB1ywrfKUskqJTh1ynyRC4y4g5DyM). The contract refuses `set_plan` from anyone else (covered by `npm run test:contract`) |
 | A language model decides that plan, and the chain records which one | In the game, under a shop's plan: "Thought through by NEAR AI (deepseek-ai/DeepSeek-V4.1-Flash-1017)". Section 4 prints the same from the contract | [`set_plan` by the baker](https://testnet.nearblocks.io/txns/4K3aGFPmDAmbvKYy6uEGCp8RmW9JXWL5QcnUtUHRxv2p): its arguments are the new shelf targets, the reason in the baker's words, and `thinker` |
 | A wanted order pays a bonus out of the shopkeeper's own purse | `npm run play:order -- https://brambleford.vercel.app` sends a guest with no screen to fill today's order and prints the transaction | [`sell` that filled Maren's order for 10 fish](https://testnet.nearblocks.io/txns/FvqQ1yN1sxwXGJXqnzqUTKZQRugHzyY97MPs8wKTtQen): the log has a second `mt_transfer` of 30 coins with the memo `bonus for filling an order` |
-| The town keeps its hours with nobody playing | Run the command in section 4 twice, fifteen minutes apart, with the game closed. **See:** the day has moved on | [`tick` sent by the host's timer](https://testnet.nearblocks.io/txns/33K95qYEspc2spYBLxRxf5FNX3ZqZ5RrE2FoN6eQ6wpH) at 18:50:05 UTC on 14 November, ten minutes after the last player's move |
+| The town keeps its hours with nobody playing | Run the command in section 4 twice, fifteen minutes apart, with the game closed. **See:** the hour has moved on | [`tick` sent by the host's timer](https://testnet.nearblocks.io/txns/33K95qYEspc2spYBLxRxf5FNX3ZqZ5RrE2FoN6eQ6wpH) at 18:50:05 UTC on 14 November, ten minutes after the last player's move |
 | A guest signs each action in the browser, the relayer pays, and the guest holds 0 NEAR | In the game: **Esc**, then the explorer link at the bottom of the menu, lists your own `join`, `gather` and `sell` | [`sell` by a guest](https://testnet.nearblocks.io/txns/HPTRzSKwkEjQenNfoiyFh9UgMykJkjGkRFY8PFxswXdw): signed by `brambleford-folk.testnet`, carrying a delegate action from [the guest's account](https://testnet.nearblocks.io/address/g4e65cfbec48010d4.brambleford-folk.testnet) |
 | Coins, goods and shop shares are NEP-245 balances in one contract | Run the command below. **See:** five numbers in quotes: the blacksmith's coins, ore, wood, tools, and the shares of her shop held by her own account (`"0"`) | [The contract's account](https://testnet.nearblocks.io/address/brambleford.testnet) |
 | Shops go under and come back with no one patching anything | Section 4 prints the town's recent history | The history lines in section 4 are stored by the contract itself |
@@ -181,10 +181,11 @@ step 1 installs quickly.
 1. `npm run setup:contract` installs the contract's tools (near-sdk-js, near-workspaces).
 2. `npm run build:contract` builds `contract/build/brambleford.wasm`.
 3. `npm run test:contract` deploys it to a local sandbox and plays a short game.
-   **See:** 38 lines starting `PASS`, then `All checks passed`. They cover
+   **See:** 45 lines starting `PASS`, then `All checks passed`. They cover
    joining, gathering, selling, buying, eating, conservation of coins, the
    shopkeeper-only `set_plan`, wanted orders and their bonus, the richest list,
-   NEP-245 transfers, and the hourly tick with its gas use.
+   a part-owner who goes away and comes back, NEP-245 transfers, and the hourly
+   tick with its gas use.
 4. `npm run sandbox` starts a sandbox chain with the town deployed and leaves it
    running. **See:** `Wrote .env.local`.
 5. In a second terminal, `npm run dev`, and in a third, `npm run test:api`
@@ -217,16 +218,17 @@ Nobody wrote those: a run of bad fishing did it. The shopkeepers' accounts are
 the townsfolk's purse is `townsfolk.brambleford.testnet`.
 
 The town keeps its hours with nobody playing. The host's timer calls `tick`
-every ten minutes and each call works through up to 36 game hours, so an empty
-town moves at a little over a third of its usual pace. While someone plays,
-their tab nudges the clock every game hour instead.
+every ten minutes and asks for three game hours each time, so an empty town
+ambles through about one game day every hour and twenty minutes. While someone
+plays, their tab nudges the clock every game hour instead, and a day takes two
+and a half minutes.
 
 ## Tests
 
 | Command | What it checks | Needs |
 |---|---|---|
-| `npm test` | The types, a two-week run of the economy, the shared rules (`test:rules`), the back end with the model and the chain stood in (`test:server`, 203 checks), and the Google sign-in checks (`test:google`, 25 checks) | Nothing but `npm install` |
-| `npm run test:contract` | 38 checks against the real contract on a local sandbox chain | `npm run setup:contract`, `npm run build:contract` |
+| `npm test` | The types, a two-week run of the economy, the shared rules (`test:rules`), the back end with the model and the chain stood in (`test:server`, 211 checks), and the Google sign-in checks (`test:google`, 25 checks) | Nothing but `npm install` |
+| `npm run test:contract` | 45 checks against the real contract on a local sandbox chain | `npm run setup:contract`, `npm run build:contract` |
 | `OLD_WASM=<an older build> npm run test:contract` | The same, plus an upgrade rehearsal: a town started by the older contract, then the new code deployed over it | An older `brambleford.wasm` |
 | `npm run test:api` | The HTTP API end to end: a guest joins, signs, is relayed; a shopkeeper plans; two browsers share one signed-in player | `npm run sandbox` and `npm run dev` running |
 | `npm run play:order -- <address>` | One guest with no screen fills a wanted order through the public API | The hosted game, or a sandbox and dev server |
@@ -255,11 +257,15 @@ their tab nudges the clock every game hour instead.
 - **The hosted game has not been load-tested**, and one relayer account
   signs everything, so many simultaneous players would queue.
 - **Balance.** Coins a player hoards leave circulation. With many long-term
-  players the townsfolk's purse would run low.
+  players the townsfolk's purse would run low. One leak is closed: a part-owner
+  who has done nothing in town for more than three game days is paid no
+  dividend, and their cut goes to the townsfolk instead, so profits do not pile
+  up with people who have left. They keep their share and are paid again when
+  they come back.
 - **Cost.** The contract is JavaScript (near-sdk-js), so each call burns about
   15 TGas before doing anything. Keeping the town ticking costs the relayer
   roughly 0.6 to 0.8 testnet NEAR per hour of active play, and the timer about
-  1.5 a day with nobody there. A tab nobody has touched for three minutes stops
+  half a NEAR a day with nobody there. A tab nobody has touched for three minutes stops
   nudging the clock.
 - **Abuse limits are light.** The relayer only pays for one ordinary game
   action per request, and requests are rate-limited per address in memory,

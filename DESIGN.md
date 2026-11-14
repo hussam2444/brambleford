@@ -44,6 +44,9 @@ Reference feel: Stardew Valley's town and shops. Not a trading terminal.
   days later and reopen it from their own purse.
 - Supply shocks (blight, a mine collapse, a salmon run) arrive on their own and
   move prices for a few days.
+- A part-owner is paid their share of the profit on days they are about. One
+  who has done nothing in town for more than three days is away, and their cut
+  goes to the townsfolk until they are back.
 - Each morning the shopkeepers shortest of something pin an order to the
   notice board. Whoever brings all of it first is paid a bonus out of that
   shopkeeper's own purse, so no coin is made.

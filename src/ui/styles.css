@@ -105,9 +105,10 @@ kbd {
 .toast.show { opacity: 1; }
 
 /* ── The shop ── */
+/* Above the bag and the rest of the screen, so a tall panel in a short window is never covered. The title card (10) still sits on top. */
 .shop-wrap {
   position: absolute; inset: 0; display: none; place-items: center;
-  background: rgba(20, 14, 8, 0.35); pointer-events: auto;
+  background: rgba(20, 14, 8, 0.35); pointer-events: auto; z-index: 6;
 }
 .shop-wrap.show { display: grid; }
 .shop { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; padding: 18px 20px 16px; }
