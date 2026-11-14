@@ -20,7 +20,7 @@ import { KeyPair, decodeSignedTransaction } from 'near-api-js';
 import * as Rules from '../src/economy/town';
 import handler from '../api/[route]';
 import {
-  HOUSE_RULES, MODEL_TIMEOUT_MS, PLAN_LIMITS, allow, booksFor, decide, handle, methodAllowed, readReply, submitPlan, think, thinkerName,
+  BACKUP_TIMEOUT_MS, HOUSE_RULES, MODEL_TIMEOUT_MS, PLAN_LIMITS, allow, booksFor, decide, handle, methodAllowed, readReply, submitPlan, think, thinkerName,
   type ServerEnv, type Shop,
 } from '../server/near';
 
@@ -45,14 +45,16 @@ const RPC = 'http://rpc.invalid';
 const CONTRACT = 'town.test';
 const RELAYER = 'folk.test';
 const KEY = 'a-made-up-key-for-tests';
-const DEFAULT_THINKER = 'NEAR AI (deepseek-ai/DeepSeek-V3.1)';
+const DEFAULT_MODEL = 'deepseek-ai/DeepSeek-V4.1-Flash-1017';
+const BACKUP_MODEL = 'anthropic/claude-haiku-5-5';
+const DEFAULT_THINKER = `NEAR AI (${DEFAULT_MODEL})`;
 const TGAS = 10n ** 12n;
 /** A block hash: thirty-two zero bytes, written in base58. */
 const BLOCK = '1'.repeat(32);
 const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64');
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
-interface ChatRequest { model: string; messages: { role: string; content: string }[]; max_tokens: number; temperature: number }
+interface ChatRequest { model: string; messages: { role: string; content: string }[]; max_tokens: number; temperature: number; chat_template_kwargs?: { enable_thinking?: boolean } }
 interface AiCall { method?: string; headers: Record<string, string>; body: ChatRequest; signal?: AbortSignal }
 type Answer = (body: ChatRequest, signal?: AbortSignal) => Response | Promise<Response>;
 
@@ -379,7 +381,8 @@ heading('The model decides, and the rules stand behind it (think)');
 {
   const tight = () => baker((m) => { m.coins = 60; }); // the rules would cut wheat from 16 to 14
   const byRules = { ...decide(tight(), null)!, thinker: HOUSE_RULES };
-  const withModel: ServerEnv = { NEAR_AI_API_KEY: KEY };
+  // One model only here, so each test below counts one question. The second model has its own tests further down.
+  const withModel: ServerEnv = { NEAR_AI_API_KEY: KEY, NEAR_AI_BACKUP_MODEL: 'none' };
   const fresh = () => { ai.calls.length = 0; warnings.length = 0; };
 
   fresh();
@@ -388,12 +391,13 @@ heading('The model decides, and the rules stand behind it (think)');
   const [call] = ai.calls;
   check('it is asked once, with a POST', ai.calls.length === 1 && call.method === 'POST');
   check('the key travels in the Authorization header', call.headers.Authorization === `Bearer ${KEY}` && call.headers['Content-Type'] === 'application/json');
-  same('the request carries model, messages, max_tokens and temperature, and nothing else', Object.keys(call.body).sort(), ['max_tokens', 'messages', 'model', 'temperature']);
-  check('the default model is DeepSeek V3.1', call.body.model === 'deepseek-ai/DeepSeek-V3.1');
+  same('the request carries model, messages, max_tokens, temperature and the thinking switch, and nothing else', Object.keys(call.body).sort(), ['chat_template_kwargs', 'max_tokens', 'messages', 'model', 'temperature']);
+  check('the default model is the DeepSeek that NEAR AI serves itself', call.body.model === DEFAULT_MODEL);
+  check('the model is told to answer without thinking out loud first', call.body.chat_template_kwargs?.enable_thinking === false);
   same("the messages are that shopkeeper's books", call.body.messages, booksFor(tight(), null));
-  check('the reply is kept short and the mood steady', Number.isInteger(call.body.max_tokens) && call.body.max_tokens >= 150 && call.body.max_tokens <= 600 && call.body.temperature >= 0 && call.body.temperature <= 1);
+  check('the reply is kept short and the mood steady', Number.isInteger(call.body.max_tokens) && call.body.max_tokens >= 300 && call.body.max_tokens <= 1000 && call.body.temperature >= 0 && call.body.temperature <= 1);
   check('the request can be cut off', call.signal instanceof AbortSignal && !call.signal.aborted);
-  check('the model is given 7 seconds', MODEL_TIMEOUT_MS === 7000);
+  check('the first model is given 8 seconds and the second 6, which leaves time to sign the plan', MODEL_TIMEOUT_MS === 8000 && BACKUP_TIMEOUT_MS === 6000);
   check('the key is nowhere in what the model is sent', !JSON.stringify(call.body).includes(KEY));
 
   fresh();
@@ -401,7 +405,7 @@ heading('The model decides, and the rules stand behind it (think)');
   check('NEAR_AI_MODEL picks another model, and the plan says which', ai.calls[0].body.model === 'some-lab/Another-Model' && other?.thinker === 'NEAR AI (some-lab/Another-Model)');
   fresh();
   const blank = await think({ ...withModel, NEAR_AI_MODEL: '  ' }, tight(), null);
-  check('an empty NEAR_AI_MODEL means the default', ai.calls[0].body.model === 'deepseek-ai/DeepSeek-V3.1' && blank?.thinker === DEFAULT_THINKER);
+  check('an empty NEAR_AI_MODEL means the default', ai.calls[0].body.model === DEFAULT_MODEL && blank?.thinker === DEFAULT_THINKER);
   same('a model name is tidied before it is shown', thinkerName({ NEAR_AI_MODEL: '<b>lab</b>/model\nname' }), 'NEAR AI (blab/b/model name)');
   check('and a very long one is cut short', thinkerName({ NEAR_AI_MODEL: 'm'.repeat(500) }) === `NEAR AI (${'m'.repeat(60)})`);
 
@@ -458,6 +462,52 @@ heading('The model decides, and the rules stand behind it (think)');
   for (const [, answer] of failing) { ai.answer = answer; await think(withModel, tight(), null); }
   check('the key is never written to the log', warnings.length === failing.length && !warnings.some((line) => line.includes(KEY)));
   check('the log says what went wrong', warnings.some((line) => line.includes('HTTP 401')) && warnings.some((line) => line.includes('could not be used')) && warnings.every((line) => line.includes('The house rules stand in.')));
+
+  // The second model. It is asked only when the first gives nothing usable.
+  const twoModels: ServerEnv = { NEAR_AI_API_KEY: KEY };
+  const good = () => chat(say({ wheat: 15, bread: 9 }, 'Bread sells, so one more loaf a day and a little less wheat.')); // a new answer each time: one can only be read once
+  fresh();
+  ai.answer = good;
+  check('when the first model answers, the second is never asked', (await think(twoModels, tight(), null))?.thinker === DEFAULT_THINKER && ai.calls.length === 1 && warnings.length === 0);
+
+  fresh();
+  ai.answer = (body) => (body.model === DEFAULT_MODEL ? new Response('down', { status: 503 }) : good());
+  const second = await think(twoModels, tight(), null);
+  same('when the first model fails, the second decides, and the plan names the one that did', second, { target: { wheat: 15, bread: 9 }, plan: 'Bread sells, so one more loaf a day and a little less wheat.', thinker: `NEAR AI (${BACKUP_MODEL})` });
+  check('the second model is Claude Haiku 5.5, asked the same question in the same way', ai.calls.length === 2 && ai.calls[1].body.model === BACKUP_MODEL && stable(ai.calls[1].body.messages) === stable(ai.calls[0].body.messages) && ai.calls[1].headers.Authorization === `Bearer ${KEY}`);
+  check('the log says the first failed and who is asked next', warnings.length === 1 && warnings[0].includes(DEFAULT_MODEL) && warnings[0].includes('HTTP 503') && warnings[0].includes(`Asking ${BACKUP_MODEL} instead.`), warnings[0]);
+
+  fresh();
+  ai.answer = (body) => (body.model === DEFAULT_MODEL ? chat('') : chat(say({ wheat: 16, bread: 8 }, 'All is well, so the shelf stays as it is.')));
+  check('a second model that changes nothing is respected too', (await think(twoModels, tight(), null)) === null && ai.calls.length === 2 && warnings.length === 1);
+
+  fresh();
+  ai.answer = () => new Response('down', { status: 503 });
+  same('when both models fail, the house rules decide', await think(twoModels, tight(), null), byRules);
+  check('each was asked once, and the log says the rules stood in', ai.calls.length === 2 && warnings.length === 2 && warnings[1].includes(BACKUP_MODEL) && warnings[1].includes('The house rules stand in.'), warnings.join(' | '));
+
+  fresh();
+  ai.answer = (_body, signal) => new Promise<Response>((_resolve, reject) => {
+    const connection = setTimeout(() => reject(new Error('nothing cut the request off')), 5000);
+    signal?.addEventListener('abort', () => { clearTimeout(connection); reject(signal.reason); });
+  });
+  const start = Date.now();
+  same('two models that never answer are each cut off at their own limit', await think(twoModels, tight(), null, 60, 40), byRules);
+  check('and the whole wait is the two limits, no more', Date.now() - start < 1500 && warnings.length === 2 && warnings[0].includes('no answer in 60 ms') && warnings[1].includes('no answer in 40 ms'), warnings.join(' | '));
+
+  fresh();
+  ai.answer = (body) => (body.model === 'lab/first' ? new Response('down', { status: 500 }) : good());
+  const named = await think({ ...twoModels, NEAR_AI_MODEL: 'lab/first', NEAR_AI_BACKUP_MODEL: 'lab/second' }, tight(), null);
+  check('NEAR_AI_BACKUP_MODEL picks the second model', ai.calls.length === 2 && ai.calls[1].body.model === 'lab/second' && named?.thinker === 'NEAR AI (lab/second)');
+
+  fresh();
+  ai.answer = () => new Response('down', { status: 500 });
+  await think({ ...twoModels, NEAR_AI_BACKUP_MODEL: ' None ' }, tight(), null);
+  check('"none" means no second model', ai.calls.length === 1 && warnings.length === 1 && warnings[0].includes('The house rules stand in.'));
+
+  fresh();
+  await think({ ...twoModels, NEAR_AI_MODEL: BACKUP_MODEL }, tight(), null);
+  check('the same model is not asked twice in a row', ai.calls.length === 1);
 }
 
 // ── 5. A whole nudge of the clock ───────────────────────────────────────────
@@ -468,7 +518,7 @@ const onChain: ServerEnv = {
   NEAR_RPC_URL: RPC, NEAR_CONTRACT_ID: CONTRACT, NEAR_RELAYER_ID: RELAYER, NEAR_RELAYER_KEY: key(),
   NEAR_KEY_BLACKSMITH: key(), NEAR_KEY_BAKER: key(), NEAR_KEY_FISHMONGER: key(), NEAR_KEY_CARPENTER: key(),
 };
-const onChainWithModel: ServerEnv = { ...onChain, NEAR_AI_API_KEY: KEY };
+const onChainWithModel: ServerEnv = { ...onChain, NEAR_AI_API_KEY: KEY, NEAR_AI_BACKUP_MODEL: 'none' };
 
 let today = 100;
 /** A fresh town at the given hour, on a day no earlier test has used, with an hour waiting to be run. */

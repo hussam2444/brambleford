@@ -9,8 +9,9 @@
 // then deploys the contract, starts the town, and writes every id and key to
 // `.env.testnet` (which git ignores). Run the game against it with `npm run dev:testnet`.
 //
-// Safe to run again with the same name: it reuses the accounts in `.env.testnet`
-// and redeploys the code without restarting the town.
+// Safe to run again with the same name: it reuses the accounts in `.env.testnet`,
+// redeploys the code without restarting the town, and keeps any other settings
+// you have added to that file.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Account, JsonRpcProvider, KeyPair, nearToYocto, teraToGas, type KeyPairString } from 'near-api-js';
@@ -97,19 +98,26 @@ if (!started) {
   await contract.account.callFunction({ contractId, methodName: 'init', args: { town_account: `townsfolk.${contractId}`, merchant_accounts }, gas: teraToGas(100) });
 }
 
+const written: Record<string, string> = {
+  VITE_NEAR_NETWORK: 'testnet',
+  VITE_NEAR_RPC_URL: RPC,
+  VITE_NEAR_CONTRACT_ID: contractId,
+  NEAR_RPC_URL: RPC,
+  NEAR_CONTRACT_ID: contractId,
+  NEAR_CONTRACT_KEY: contract.key,
+  NEAR_RELAYER_ID: relayerId,
+  NEAR_RELAYER_KEY: relayer.key,
+  ...keys,
+};
+// Anything else that was already in the file (a Google client id, a NEAR AI key) stays as it was.
+const kept = sameTown ? Object.entries(saved).filter(([slot]) => !(slot in written)) : [];
 writeFileSync(
   ENV_FILE,
   [
     '# Written by `npm run deploy`. Holds private keys: never commit this file.',
-    'VITE_NEAR_NETWORK=testnet',
-    `VITE_NEAR_RPC_URL=${RPC}`,
-    `VITE_NEAR_CONTRACT_ID=${contractId}`,
-    `NEAR_RPC_URL=${RPC}`,
-    `NEAR_CONTRACT_ID=${contractId}`,
-    `NEAR_CONTRACT_KEY=${contract.key}`,
-    `NEAR_RELAYER_ID=${relayerId}`,
-    `NEAR_RELAYER_KEY=${relayer.key}`,
-    ...Object.entries(keys).map(([slot, key]) => `${slot}=${key}`),
+    ...Object.entries(written).map(([slot, value]) => `${slot}=${value}`),
+    ...(kept.length ? ['# Settings you added yourself, kept as they were'] : []),
+    ...kept.map(([slot, value]) => `${slot}=${value}`),
     '',
   ].join('\n'),
 );

@@ -21,8 +21,10 @@ export const PLAYER_METHODS = ['join', 'gather', 'sell', 'buy', 'eat', 'invest',
 export interface ServerEnv {
   /** Optional. With it, a model on NEAR AI Cloud decides each shopkeeper's plan, inside hard limits. Without it, fixed rules do. */
   NEAR_AI_API_KEY?: string;
-  /** Optional. Which model to ask. Left empty, it is deepseek-ai/DeepSeek-V3.1. */
+  /** Optional. Which model to ask first. Left empty, it is deepseek-ai/DeepSeek-V4.1-Flash-1017, which NEAR AI serves from its own sealed hardware. */
   NEAR_AI_MODEL?: string;
+  /** Optional. Which model to ask when the first gives no usable answer in time. Left empty, it is anthropic/claude-haiku-5-5. "none" means no second model. */
+  NEAR_AI_BACKUP_MODEL?: string;
   /** Each shopkeeper's own key: NEAR_KEY_BLACKSMITH, NEAR_KEY_BAKER, and so on. */
   [key: `NEAR_KEY_${string}`]: string | undefined;
   NEAR_RPC_URL?: string;
@@ -261,8 +263,9 @@ export function methodAllowed(route: string, method?: string): boolean {
 // as the shopkeeper. It is shown that shopkeeper's own books and nothing else,
 // and its answer is never trusted: only small steps, on goods the shop already
 // stocks, get through (`readReply`). When the model is slow, out of reach or
-// says something unusable, the plain rules in `decide` step in. With no key,
-// the rules decide every time.
+// says something unusable, a second model is asked. When that fails too, the
+// plain rules in `decide` step in. With no key, the rules decide every time.
+// Whoever decided is written down with the plan, on chain.
 
 export interface Shop {
   id: string;
@@ -326,9 +329,14 @@ export function decide(m: Shop, season: Season): { target: Record<string, number
 // ── Asking the model ────────────────────────────────────────────────────────
 
 const NEAR_AI_URL = 'https://cloud-api.near.ai/v1/chat/completions';
-const DEFAULT_MODEL = 'deepseek-ai/DeepSeek-V3.1';
-/** How long the model gets to answer. The clock waits on it, so not long. */
-export const MODEL_TIMEOUT_MS = 7000;
+/** Asked first. NEAR AI serves this one itself, privately, from sealed hardware (a TEE). */
+const DEFAULT_MODEL = 'deepseek-ai/DeepSeek-V4.1-Flash-1017';
+/** Asked when the first gives no usable answer in time. */
+const DEFAULT_BACKUP_MODEL = 'anthropic/claude-haiku-5-5';
+/** How long the first model gets to answer. Whoever nudged the clock is waiting, so not long. */
+export const MODEL_TIMEOUT_MS = 8000;
+/** How long the second model gets, when it is needed at all. */
+export const BACKUP_TIMEOUT_MS = 6000;
 /**
  * What a model may do to a plan, whatever it says. A shelf target moves at most
  * `step` a day and stays between `min` and `max` (the contract holds it to the
@@ -348,8 +356,13 @@ export interface Change {
 }
 
 const modelName = (env: ServerEnv) => (env.NEAR_AI_MODEL ?? '').trim() || DEFAULT_MODEL;
-/** How a plan the model made is signed off, for example "NEAR AI (deepseek-ai/DeepSeek-V3.1)". */
-export const thinkerName = (env: ServerEnv) => `NEAR AI (${tidy(modelName(env), 60)})`;
+/** The second model to try, or an empty string when there is none. */
+const backupName = (env: ServerEnv) => {
+  const name = (env.NEAR_AI_BACKUP_MODEL ?? '').trim() || DEFAULT_BACKUP_MODEL;
+  return name.toLowerCase() === 'none' || name === modelName(env) ? '' : name;
+};
+/** How a plan a model made is signed off, for example "NEAR AI (deepseek-ai/DeepSeek-V4.1-Flash-1017)". */
+export const thinkerName = (env: ServerEnv, model = modelName(env)) => `NEAR AI (${tidy(model, 60)})`;
 
 /**
  * Words from outside, made safe to store and to show: one line, no control or
@@ -414,7 +427,7 @@ export function booksFor(m: Shop, season: Season): { role: 'system' | 'user'; co
     '{"target": {"<good>": <whole number>}, "plan": "<your reason>"}',
     '- "target" lists every good on your shelf, by the exact name used in your books. To leave one as it is, repeat its target.',
     `- Each number is a whole number from ${PLAN_LIMITS.min} to ${PLAN_LIMITS.max}, and at most ${PLAN_LIMITS.step} away from the target it has now.`,
-    `- "plan" is one or two short, plain sentences in your own voice, under ${PLAN_LIMITS.planChars} characters, saying what you are changing and why. No exclamation marks, no emoji, no line breaks.`,
+    `- "plan" is one or two short, plain sentences in your own voice, speaking as "I", under ${PLAN_LIMITS.planChars} characters, saying what you are changing and why. Use everyday names for goods ("smoked fish", not "smoked_fish"). No exclamation marks, no emoji, no line breaks.`,
   ];
   return [
     { role: 'system', content: brief.join('\n') },
@@ -478,19 +491,34 @@ export function readReply(reply: string, m: Shop): { target: Record<string, numb
     usable += 1;
     if (n !== now) target[good] = n;
   }
-  const plan = tidy(said.plan, PLAN_LIMITS.planChars);
+  // A model sometimes writes a good's id where a person would say its name: "smoked_fish".
+  const plan = tidy(said.plan, PLAN_LIMITS.planChars).replace(/[a-z]+(?:_[a-z]+)+/g, (id) => id.replace(/_/g, ' '));
   if (!usable || plan.length < 8) return null;
   return { target, plan };
 }
 
-/** Ask the model what this shopkeeper should do. Null on any problem at all: no answer, a slow answer, a bad answer. */
-async function askModel(env: ServerEnv, m: Shop, season: Season, timeoutMs: number) {
+/**
+ * Ask one model what this shopkeeper should do. Null on any problem at all: no
+ * answer, a slow answer, a bad answer. `next` is the model that will be asked
+ * instead, if there is one; it only changes what the log says.
+ */
+async function askModel(env: ServerEnv, model: string, m: Shop, season: Season, timeoutMs: number, next = '') {
   try {
     const res = await fetch(NEAR_AI_URL, {
       method: 'POST',
       signal: AbortSignal.timeout(timeoutMs),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.NEAR_AI_API_KEY}` },
-      body: JSON.stringify({ model: modelName(env), messages: booksFor(m, season), max_tokens: 300, temperature: 0.6 }),
+      body: JSON.stringify({
+        model,
+        messages: booksFor(m, season),
+        // Room for the answer and a little more. Some models think before they answer, and that counts against this.
+        max_tokens: 700,
+        temperature: 0.6,
+        // Left to itself the first model thinks out loud until its allowance is gone and never
+        // reaches the answer. This asks for the answer alone. A model that does not know the
+        // setting ignores it.
+        chat_template_kwargs: { enable_thinking: false },
+      }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text: unknown = (await res.json())?.choices?.[0]?.message?.content;
@@ -500,20 +528,27 @@ async function askModel(env: ServerEnv, m: Shop, season: Season, timeoutMs: numb
   } catch (err) {
     // Say why in the server's log, so a wrong key or model name is easy to spot. The key itself is never logged.
     const why = err instanceof Error ? (err.name === 'TimeoutError' ? `no answer in ${timeoutMs} ms` : tidy(err.message, 80)) : 'an unknown problem';
-    console.warn(`NEAR AI did not decide for the ${tidy(m.id, 24)}: ${why}. The house rules stand in.`);
+    const then = next ? `Asking ${tidy(next, 60)} instead.` : 'The house rules stand in.';
+    console.warn(`NEAR AI (${tidy(model, 60)}) did not decide for the ${tidy(m.id, 24)}: ${why}. ${then}`);
     return null;
   }
 }
 
 /**
  * What a shopkeeper changes today, why, and who decided. Null if nothing changes.
- * With a NEAR AI key the model decides. If it cannot, the rules do.
+ * With a NEAR AI key a model decides: the first one, or the second if the first
+ * cannot. If neither can, the rules do.
  */
-export async function think(env: ServerEnv, m: Shop, season: Season, timeoutMs = MODEL_TIMEOUT_MS): Promise<Change | null> {
+export async function think(env: ServerEnv, m: Shop, season: Season, timeoutMs = MODEL_TIMEOUT_MS, backupMs = BACKUP_TIMEOUT_MS): Promise<Change | null> {
   if (env.NEAR_AI_API_KEY) {
-    const theirs = await askModel(env, m, season, timeoutMs);
-    // A usable answer that moves nothing is a decision too: the shop stays as it is.
-    if (theirs) return Object.keys(theirs.target).length ? { ...theirs, thinker: thinkerName(env) } : null;
+    const backup = backupName(env);
+    const models: [string, number][] = backup ? [[modelName(env), timeoutMs], [backup, backupMs]] : [[modelName(env), timeoutMs]];
+    for (let n = 0; n < models.length; n++) {
+      const [model, ms] = models[n];
+      const theirs = await askModel(env, model, m, season, ms, models[n + 1]?.[0]);
+      // A usable answer that moves nothing is a decision too: the shop stays as it is.
+      if (theirs) return Object.keys(theirs.target).length ? { ...theirs, thinker: thinkerName(env, model) } : null;
+    }
   }
   const ours = decide(m, season);
   return ours && { ...ours, thinker: HOUSE_RULES };
