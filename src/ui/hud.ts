@@ -10,6 +10,8 @@ import {
 import { coinUrl, iconUrl, portraitUrl } from '../game/art';
 import { sfx } from '../game/sfx';
 import { chainConfigured, practiceRequested } from '../near/chain';
+import { browserPublicKey } from '../near/chain'; // [google sign-in]
+import { addGoogleToMenu } from '../near/google'; // [google sign-in]
 
 /** One hour of the time-lapse: each shop's selling price as a share of normal, or null while it is shut. */
 export interface LapsePoint {
@@ -256,6 +258,8 @@ export class Hud {
          <p class="menu-note">${this.world.status()}${this.world.mode === 'chain' ? `<br />This is your day ${this.world.dayNumber()}. The town itself is on day ${this.world.town.day}.` : ''}</p>
          ${explorer ? `<p class="menu-note"><a href="${explorer}" target="_blank" rel="noopener">See every move you have made on the NEAR explorer ↗</a></p>` : ''}`;
     this.el.menu.innerHTML = `<h2>Brambleford</h2>${body}`;
+    // [google sign-in] Adds nothing at all unless this build has a Google client id.
+    if (!confirming) addGoogleToMenu(this.el.menu, this.world.mode === 'chain', browserPublicKey);
   }
 
   setWhere(text: string) {
