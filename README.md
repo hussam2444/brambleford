@@ -21,7 +21,8 @@ NEAR account of its own: a model on NEAR AI Cloud works out its plan for the
 day inside hard limits, and the shopkeeper signs that plan with its own key.
 The town keeps its hours whether or not anyone is playing.
 
-**Play it now:** https://brambleford.vercel.app (no sign-up, no wallet). The
+**Play it now:** https://brambleford.vercel.app (no sign-up, no wallet).
+[Demo video](https://x.com/Electricaliee/status/2121704290888667251). The
 town is live on NEAR testnet at
 [`brambleford.testnet`](https://testnet.nearblocks.io/address/brambleford.testnet).
 
@@ -259,9 +260,8 @@ Every push runs `npm test` and the contract tests on GitHub (`.github/workflows/
   accounts carry no such key. A guest's progress is not carried over on first
   sign-in, one player can use three browsers at a time, and there is no email
   sign-in. The whole path is tested on a local chain with a stand-in for
-  Google, and the hosted game shows Google's button and turns away a made-up
-  credential, but nobody had yet signed in on the hosted game with a real
-  Google account when this was written.
+  Google, and one real sign-in has been done on the hosted game: it made an
+  account holding 0 NEAR with a game-only key for the browser.
 - **The model's reach is small on purpose.** It picks shelf targets once a
   day. It does not set prices, talk to players or bargain.
 - **"Already asked today" is kept in the server's memory.** After the host
