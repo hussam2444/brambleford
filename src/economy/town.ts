@@ -508,6 +508,9 @@ export function invest(town: Town, p: Player, playerId: string, merchantId: Merc
     m.missedRent = 0;
     m.coinsAtDawn = m.coins;
     announce(town, 'reopened', `${m.name} the ${m.title.toLowerCase()} is open again, thanks to a new investor.`);
+  } else {
+    // The stake is capital, not takings: it must not be paid out tonight as "profit".
+    m.coinsAtDawn += TOWN.investCost;
   }
   return { ok: true, price: TOWN.investCost, message: `You now own ${m.holders[playerId]}% of the shop.` };
 }

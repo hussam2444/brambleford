@@ -46,7 +46,7 @@ function setup(env: ServerEnv) {
 }
 
 /** Create (or find) the NEAR account for a browser's key. The account name is derived from the key. */
-export async function join(env: ServerEnv, body: { publicKey?: string }) {
+export async function join(env: ServerEnv, body: { publicKey?: string }, who = 'local') {
   const { provider, relayer, contractId, relayerId } = setup(env);
   let key: PublicKey;
   try {
@@ -63,6 +63,8 @@ export async function join(env: ServerEnv, body: { publicKey?: string }) {
   } catch {
     // not there yet: create it below
   }
+  // Only creating an account counts against the limit: returning visitors cost nothing.
+  if (!allow('join', who)) throw new HttpError(429, 'Too many new players from this address. Try again later.');
   await relayer.signAndSendTransaction({
     receiverId: accountId,
     actions: [actions.createAccount(), actions.addFunctionCallAccessKey(key, contractId, PLAYER_METHODS)],
@@ -252,7 +254,7 @@ async function planOne(env: ServerEnv) {
 const LIMITS: Record<string, { max: number; perMs: number }> = {
   join: { max: 20, perMs: 60 * 60 * 1000 },
   relay: { max: 90, perMs: 60 * 1000 },
-  tick: { max: 30, perMs: 60 * 1000 },
+  tick: { max: 90, perMs: 60 * 1000 },
 };
 const seen = new Map<string, { count: number; since: number }>();
 
@@ -273,10 +275,10 @@ function allow(route: string, who: string): boolean {
 
 /** One entry point for every route, used by both the dev server and the hosted functions. */
 export async function handle(route: string, body: unknown, env: ServerEnv, who = 'local'): Promise<{ status: number; json: unknown }> {
-  if (!allow(route, who)) return { status: 429, json: { error: 'Too many requests. Try again in a moment.' } };
+  if (route !== 'join' && !allow(route, who)) return { status: 429, json: { error: 'Too many requests. Try again in a moment.' } };
   try {
     const data = (body ?? {}) as Record<string, string>;
-    if (route === 'join') return { status: 200, json: await join(env, data) };
+    if (route === 'join') return { status: 200, json: await join(env, data, who) };
     if (route === 'relay') return { status: 200, json: await relay(env, data) };
     if (route === 'tick') return { status: 200, json: await tick(env) };
     return { status: 404, json: { error: 'No such route.' } };

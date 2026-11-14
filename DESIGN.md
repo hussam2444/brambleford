@@ -40,7 +40,8 @@ Reference feel: Stardew Valley's town and shops. Not a trading terminal.
   Each quote comes with the shopkeeper's reasoning in plain words (the tooltip).
 - `town.ts` runs the hour: gatherers sell to shops, shops make goods,
   townsfolk buy, and at day's end shops pay rent. Two missed rents and a shop
-  shuts until someone invests.
+  shuts until a player invests, or until the townsfolk club together three
+  days later and reopen it from their own purse.
 - Supply shocks (blight, a mine collapse, a salmon run) arrive on their own and
   move prices for a few days.
 

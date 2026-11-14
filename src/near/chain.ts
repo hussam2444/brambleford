@@ -227,6 +227,12 @@ export class ChainWorld implements GameWorld {
 
   /** Show the result at once using the shared rules, then send the real thing. */
   private act(method: string, args: Record<string, unknown>, locally: () => ActionResult): ActionResult {
+    // After a pause the town on screen can be hours behind the chain. Wait for the
+    // clock to catch up before trading on prices that are no longer true.
+    const behind = this.chainNow() - this.nextTickAt > 30_000;
+    if (behind && method !== 'gather' && method !== 'eat' && (this.ticking || Date.now() - this.lastTickTry > 4000)) {
+      return { ok: false, message: 'The town is just waking up. Try again in a moment.' };
+    }
     const result = locally();
     if (!result.ok) return result;
     this.version += 1;
