@@ -201,8 +201,9 @@ try {
   const worthBefore = await worthOf(alice);
   r = await play(alice, 'invest', { merchant: 'carpenter' });
   const news: string[] = (await view('get_town')).town.events.map((e: any) => e.text);
-  check('buying into a shop is announced with a friendly name, not an account id',
-    r.ok && r.value.ok && news.includes("Traveller lice bought into Tobin's shop.") && !news.some((text) => text.includes(alice.accountId) || text.includes('test.near')), r.value?.message);
+  // Alice's account name is her own choice, so the town does not repeat any of it. Only accounts the game made get a tag.
+  check('buying into a shop is announced without the account name, or any part of it',
+    r.ok && r.value.ok && news.includes("A traveller bought into Tobin's shop.") && !news.some((text) => text.includes(alice.accountId) || text.includes('test.near') || text.includes('lice')), r.value?.message);
   const listed = async () => ((await view('get_town')).richest as { id: string; worth: number }[]).find((x) => x.id === alice.accountId)?.worth;
   check('a share counts towards what a player is worth', (await view('mt_balance_of', { account_id: alice.accountId, token_id: 'share:carpenter' })) === '25'
     && (await listed()) === worthBefore && (await worthOf(alice, 25)) === worthBefore, `worth ${worthBefore} before and after`);
@@ -270,7 +271,47 @@ try {
   }
   check('and is paid again once she is back', alicePaidAgain >= doraPaidAgain,
     doraPaidAgain ? `Alice was paid ${alicePaidAgain} time(s) and Dora ${doraPaidAgain}` : 'the carpenter made no profit after her return, so this could not be told');
-  c = await coinsEverywhere([alice, bob, dora, ...friends]);
+  // ── Players who leave town ────────────────────────────────────────────────
+  // Coins held by someone who has gone do the town no good, and with enough of them gone the
+  // shops cannot pay their rent. After three real hours with nothing done, a player's coins go
+  // back to the townsfolk. Goods and shares stay theirs, and a return is greeted like an arrival.
+  const HOUR = 60 * 60 * 1000;
+  const chainNow = async () => (await view('get_town')).now as number;
+  const erin = await root.createSubAccount('erin');
+  await play(erin, 'join');
+  await play(erin, 'mt_transfer', { receiver_id: alice.accountId, token_id: 'coin', amount: '5' }, '1'); // so Alice has something to lose
+  const aliceBefore = await view('get_player', { account_id: alice.accountId });
+  // Three hours and a bit go by, in three stretches. Erin does a little in each, so she is never away for long.
+  for (let stretch = 0; stretch < 3; stretch++) {
+    const from = await chainNow();
+    while ((await chainNow()) - from < 1.05 * HOUR) await worker.provider.fastForward(2000);
+    await play(erin, 'gather', { good: 'wood', times: 1 });
+  }
+  // The town sees to a few of those who left with each nudge of the clock.
+  for (let i = 0; i < 6; i++) {
+    await play(bob, 'tick');
+    await worker.provider.fastForward(15);
+  }
+  const aliceGone = await view('get_player', { account_id: alice.accountId });
+  const farewell = aliceGone.notices.map((n: any) => /^While you were away your (\d+) coins went back/.exec(n.text)).find(Boolean);
+  check('a player who has done nothing for three hours has left town, and her coins are back with the townsfolk',
+    aliceBefore.coins > 0 && aliceGone.coins === 0 && aliceGone.gone === true && Number(farewell?.[1]) >= aliceBefore.coins, `${farewell?.[1]} coins went back`);
+  check('her goods and her share in the shop are still hers', JSON.stringify(aliceGone.inventory) === JSON.stringify(aliceBefore.inventory)
+    && (await view('mt_balance_of', { account_id: alice.accountId, token_id: 'share:carpenter' })) === '25');
+  const erinNow = await view('get_player', { account_id: erin.accountId });
+  check('someone who was about all along is left alone', erinNow.coins === 15 && erinNow.gone !== true && erinNow.notices.length === 0, `${erinNow.coins} coins`);
+  c = await coinsEverywhere([alice, bob, dora, erin, ...friends]);
+  check('the coins went to the townsfolk: every one is still accounted for', c.sum === c.supply, `${c.sum} of ${c.supply}`);
+  r = await play(alice, 'gather', { good: 'wood', times: 1 });
+  const aliceBack = await view('get_player', { account_id: alice.accountId });
+  check('when she comes back the townsfolk start her off again', r.ok && r.value.ok && aliceBack.coins === 20 && aliceBack.gone !== true
+    && aliceBack.notices.some((n: any) => n.text.startsWith('Welcome back. The townsfolk have put 20 coins')), `${aliceBack.coins} coins`);
+  r = await play(bob, 'note_players', { ids: [alice.accountId] });
+  check('only the town itself may add to the list of who is about', !r.ok);
+  r = await play(town, 'note_players', { ids: [alice.accountId, 'nobody.test.near', 7] });
+  check('and it adds nobody twice, and nobody who is not a player', r.ok && r.value === 0, `added ${r.value}`);
+
+  c = await coinsEverywhere([alice, bob, dora, erin, ...friends]);
   check('coins are still conserved at the end of it all', c.sum === c.supply, `${c.sum} of ${c.supply}`);
 
   // ── Rehearsing an upgrade of a town that is already live ──────────────────
@@ -298,6 +339,9 @@ try {
     await on(carol, 'gather', { good: 'wood', times: 12 });
     await on(carol, 'sell', { merchant: 'carpenter', good: 'wood', amount: 2 });
     await on(keeper.baker, 'set_plan', { target: { bread: 9 }, plan: 'A plan from before the upgrade.' });
+    // Dave joins under the old build and then does nothing more, before or after the upgrade.
+    const dave = await root.createSubAccount('dave');
+    await on(dave, 'join');
     const was = await look('get_state', { account_id: carol.accountId });
 
     await old.deploy('build/brambleford.wasm');
@@ -313,9 +357,29 @@ try {
     check('upgrade: orders go up at the first dawn after it', !!first, `day ${t.day}: ${first?.merchant} wants ${first?.wanted} ${first?.good}`);
     did = await on(carol, 'sell', { merchant: 'carpenter', good: 'wood', amount: 1 });
     const end = await look('get_state', { account_id: carol.accountId });
-    let sum = end.town.purse + end.player.coins;
+    const coinsOfDave = async () => (await look('get_player', { account_id: dave.accountId })).coins as number;
+    let sum = end.town.purse + end.player.coins + (await coinsOfDave());
     for (const m of Object.values<any>(end.town.merchants)) sum += m.coins;
     check('upgrade: coins are conserved across it', did.ok && sum === end.coin_supply && end.coin_supply === was.coin_supply, `${sum} of ${end.coin_supply}`);
+
+    // A town from before the upgrade kept no list of who is about, and the new build has
+    // never seen Dave do anything. The town's own account puts him on the list, and three
+    // hours later his coins go back to the townsfolk like anyone's.
+    const refused = await on(carol, 'note_players', { ids: [dave.accountId] });
+    const listed = await on(old, 'note_players', { ids: [dave.accountId, carol.accountId, dave.accountId] });
+    check('upgrade: the town can list a player the new build has never seen, and nobody else can', !refused.ok && listed.ok && listed.value === 1, `added ${listed.value}`);
+    const daveHad = await coinsOfDave();
+    const from = (await look('get_town')).now as number;
+    while (((await look('get_town')).now as number) - from < 3.1 * 60 * 60 * 1000) await worker.provider.fastForward(2000);
+    for (let i = 0; i < 3; i++) {
+      await on(carol, 'tick');
+      await worker.provider.fastForward(15);
+    }
+    const daveNow = await look('get_player', { account_id: dave.accountId });
+    const after = await look('get_state', { account_id: carol.accountId });
+    sum = after.town.purse + after.player.coins + daveNow.coins;
+    for (const m of Object.values<any>(after.town.merchants)) sum += m.coins;
+    check('upgrade: three hours on, his coins are back with the townsfolk and none are lost', daveHad === 20 && daveNow.coins === 0 && daveNow.gone === true && sum === after.coin_supply, `${sum} of ${after.coin_supply}`);
   }
 } finally {
   await worker.tearDown();

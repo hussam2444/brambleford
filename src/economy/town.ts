@@ -70,6 +70,8 @@ export interface Player {
   /** Messages meant for this player only, such as dividends. */
   notices: { seq: number; text: string }[];
   noticeSeq: number;
+  /** True once the town has taken this player to have left, until they next do something. */
+  gone?: boolean;
 }
 
 export interface TownEvent {
@@ -162,6 +164,14 @@ export const TOWN = {
    * Without this, coins pile up out of reach with people who have left, and the town runs dry.
    */
   partnerAwayDays: 3,
+  /**
+   * A player who has done nothing for this many real hours has left town. Their coins go
+   * back to the townsfolk, who spend them in the shops. Their goods and their shares in
+   * shops stay theirs, and if they come back the townsfolk start them off again.
+   * Without this, every visitor who wanders off takes a little of the town's money out of
+   * the game for good, and after enough visitors the shops cannot pay their rent.
+   */
+  idleCoinHours: 3,
   /** Anything a shopkeeper holds above this at day's end gets spent back into the town. */
   comfortableSavings: 250,
   gatherEnergy: 2,
@@ -260,17 +270,23 @@ export function newTown(): Town {
   return town;
 }
 
-/** A newcomer arrives. Their first coins are a gift from the townsfolk's purse. */
-export function newPlayer(town: Town): Player {
+/** Take up to `amount` coins out of the townsfolk's purse, as a gift to a player. Returns what could be found. */
+function fromThePurse(town: Town, amount: number): number {
   // If the purse is short (late in a busy day it can be), the richest shopkeeper tops it up first.
-  if (town.purse < TOWN.startingCoins) {
+  if (town.purse < amount) {
     const richest = Object.values(town.merchants).reduce((a, b) => (b.coins > a.coins ? b : a));
-    const help = Math.min(TOWN.startingCoins - town.purse, richest.coins);
+    const help = Math.min(amount - town.purse, richest.coins);
     richest.coins -= help;
     town.purse += help;
   }
-  const gift = Math.min(TOWN.startingCoins, town.purse);
+  const gift = Math.min(amount, town.purse);
   town.purse -= gift;
+  return gift;
+}
+
+/** A newcomer arrives. Their first coins are a gift from the townsfolk's purse. */
+export function newPlayer(town: Town): Player {
+  const gift = fromThePurse(town, TOWN.startingCoins);
   return {
     coins: gift,
     inventory: {},
@@ -281,6 +297,33 @@ export function newPlayer(town: Town): Player {
     notices: [],
     noticeSeq: 0,
   };
+}
+
+/**
+ * A player has left town (see `idleCoinHours`): their coins go back to the townsfolk.
+ * No coin is made or lost. Returns how many went back.
+ */
+export function leaveTown(town: Town, p: Player): number {
+  const back = Math.max(0, Math.floor(p.coins) || 0);
+  p.coins -= back;
+  town.purse += back;
+  p.gone = true;
+  if (back > 0) notify(p, `While you were away your ${back} coins went back to the townsfolk: Brambleford does not let coin sit idle. Your goods and your shares in shops are still yours.`);
+  return back;
+}
+
+/**
+ * Someone the town had taken to be gone is back. The townsfolk start them off again
+ * as they would a newcomer, if they have less than a newcomer gets. Returns the gift.
+ */
+export function welcomeBack(town: Town, p: Player): number {
+  if (!p.gone) return 0;
+  delete p.gone;
+  const short = TOWN.startingCoins - p.coins;
+  const gift = short > 0 ? fromThePurse(town, short) : 0;
+  p.coins += gift;
+  if (gift > 0) notify(p, `Welcome back. The townsfolk have put ${gift} coins in your pocket to start you off again.`);
+  return gift;
 }
 
 // ── Reading the town ────────────────────────────────────────────────────────
@@ -355,12 +398,16 @@ export function notify(p: Player, text: string) {
  * A short name for a player, for town news and the notice board. An account id
  * is long and means nothing to a reader, so only four characters of it are
  * shown: "g57748bfc0a1b2c3d.brambleford-folk.testnet" is "Traveller 5774".
- * The practice town's one player, "you", is simply "A traveller".
+ * The practice town's one player, "you", is simply "A traveller", and so is
+ * anyone who came to town under an account name of their own.
  */
 export function friendlyName(playerId: string): string {
   const own = String(playerId ?? '').split('.')[0];
-  const tag = own.slice(1, 5).replace(/[^a-z0-9]/gi, '');
-  return own === 'you' || !tag ? 'A traveller' : `Traveller ${tag}`;
+  // Only accounts the game itself made get a tag: their names are a letter and sixteen
+  // characters of a hash. Anyone can register a NEAR account under a name of their own
+  // choosing and walk into town, and that name is not for the town news to repeat.
+  const tag = /^[gu][0-9a-f]{16}$/.test(own) ? own.slice(1, 5) : '';
+  return tag ? `Traveller ${tag}` : 'A traveller';
 }
 
 // ── Standing ────────────────────────────────────────────────────────────────

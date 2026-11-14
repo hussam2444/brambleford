@@ -154,10 +154,19 @@ export class ChainWorld implements GameWorld {
       for (let i = 0; i < 8 && !snap.player; i++) snap = await this.read();
       if (!snap.player) throw new Error('Joined the town, but could not find the new player.');
     }
+    // Someone who was away for hours was taken to have left town, and their coins went back
+    // to the townsfolk. Doing anything at all brings them back, with a newcomer's coins.
+    const wasGone = snap.player.gone === true;
+    if (wasGone) {
+      await this.send({ method: 'join', args: {} });
+      for (let i = 0; i < 8 && snap.player?.gone; i++) snap = await this.read();
+    }
     this.apply(snap);
     // old news is old: only report what happens from now on
     this.seenEvent = this.town.eventSeq;
     this.seenNotice = this.player.noticeSeq;
+    // The one exception: what became of their coins while they were away.
+    if (wasGone) for (const n of this.player.notices.filter((note) => /^(While you were away|Welcome back)/.test(note.text)).slice(-2)) this.extraNews.push(n.text);
     this.lastHour = this.town.day * 24 + this.town.hour;
 
     // The town is shared and may be weeks old. A player counts days from their own arrival.
@@ -193,7 +202,7 @@ export class ChainWorld implements GameWorld {
 
   startOverNote() {
     // [google sign-in] A signed-in player is not left behind for good: signing in again goes back to them.
-    if (googleAccount() === this.me) return 'You get a brand new guest player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. This signs you out. Your signed-in player keeps everything they own, and signing in again takes you back to them. The guest player that was waiting in this browser is left behind for good.';
+    if (googleAccount() === this.me) return 'You get a brand new guest player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. This signs you out. Your signed-in player keeps everything they own, and signing in again takes you back to them. The guest player that was waiting in this browser is left behind for good. To go back to that guest instead, choose Keep playing, then Sign out.';
     return 'You get a brand new player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. Your old player and everything they own stay behind for good.';
   }
 
@@ -324,6 +333,9 @@ export class ChainWorld implements GameWorld {
     // may have filled the order a moment ago. So the page's own lines are taken back out,
     // and news is only ever told by the chain, on the next read a second or two later.
     const eventSeq = this.town.eventSeq, noticeSeq = this.player.noticeSeq;
+    // If the town gave this player up as gone while the tab sat open, the chain will start
+    // them off again as part of this very action. Do the same here, so the two agree.
+    Rules.welcomeBack(this.town, this.player);
     const result = locally();
     this.town.events = this.town.events.filter((e) => e.seq <= eventSeq);
     this.town.eventSeq = eventSeq;

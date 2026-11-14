@@ -24,6 +24,8 @@ const COIN = 'coin';
 const SHARE = 'share:';
 /** How many overdue hours one call will work through. */
 const CATCH_UP = { duringAction: 8, onTick: 36 };
+/** How many players who have left town one call will see to. */
+const SEE_OFF_AT_MOST = 5;
 
 type Transfer = { old_owner_id: string; new_owner_id: string; token_ids: string[]; amounts: string[]; memo?: string };
 type MintOrBurn = { owner_id: string; token_ids: string[]; amounts: string[]; memo?: string };
@@ -34,6 +36,11 @@ function emit(event: 'mt_mint' | 'mt_burn' | 'mt_transfer', data: (Transfer | Mi
 
 function fail(message: string): never {
   throw new Error(message);
+}
+
+/** A name sent by a caller, if it is plain text. Anything else (a list, a number, nothing) counts as no name at all. */
+function word<T extends string>(value: unknown): T {
+  return (typeof value === 'string' ? value : '') as T;
 }
 
 @NearBindgen({ requireInit: true })
@@ -56,6 +63,12 @@ export class Brambleford {
    * state, so it is always read as `this.richest ?? []`.
    */
   richest: Rules.Rank[] | undefined = [];
+  /**
+   * When each player last did something, in milliseconds since 1970, by account. A player
+   * is taken off this list when the town gives them up as gone, and put back on it the
+   * next time they do anything. A town from before this list existed stores no such field.
+   */
+  about: Record<string, number> | undefined = {};
   private nonce = 0;
 
   @initialize({})
@@ -121,6 +134,36 @@ export class Brambleford {
     return p;
   }
 
+  /** The list of who is about, made if this town never had one. */
+  private whoIsAbout(): Record<string, number> {
+    if (!this.about) this.about = {};
+    return this.about;
+  }
+
+  /**
+   * Players who have done nothing for hours have left town: their coins go back to the
+   * townsfolk (`Rules.leaveTown`). A few at a time, so that no call does much work.
+   */
+  private seeOffThoseWhoLeft(now: number) {
+    const about = this.whoIsAbout();
+    const longAgo = now - Rules.TOWN.idleCoinHours * 60 * 60 * 1000;
+    const back: Transfer[] = [];
+    let seenTo = 0;
+    for (const id of Object.keys(about)) {
+      if (seenTo >= SEE_OFF_AT_MOST) break;
+      if (about[id] > longAgo) continue;
+      seenTo += 1;
+      delete about[id]; // off the list until they next do something
+      const p = this.loadPlayer(id);
+      if (!p) continue;
+      const coins = Rules.leaveTown(this.town, p);
+      this.savePlayer(id, p);
+      this.rank(id, p);
+      if (coins) back.push({ old_owner_id: id, new_owner_id: this.townAccount, token_ids: [COIN], amounts: [String(coins)], memo: 'left town: idle coins go back to the townsfolk' });
+    }
+    emit('mt_transfer', back);
+  }
+
   private merchantOf(account: string): MerchantId | null {
     for (const id of Rules.MERCHANT_IDS) if (this.merchantAccounts[id] === account) return id;
     return null;
@@ -143,7 +186,7 @@ export class Brambleford {
         const p = this.loadPlayer(holder);
         // A part-owner who has been away for days leaves their cut with the townsfolk, who
         // spend it in town. They keep their share, and are paid again once they are back.
-        if (!p || this.town.day - p.restedOn > Rules.TOWN.partnerAwayDays) { this.town.purse += coins; return; }
+        if (!p || p.gone || this.town.day - p.restedOn > Rules.TOWN.partnerAwayDays) { this.town.purse += coins; return; }
         p.coins += coins;
         Rules.notify(p, note);
         this.savePlayer(holder, p);
@@ -159,6 +202,7 @@ export class Brambleford {
     const after = this.stockTotals();
     for (const g of GOOD_IDS) this.supply[g] = (this.supply[g] ?? 0) + (after[g] ?? 0) - (before[g] ?? 0);
     emit('mt_transfer', dividends);
+    this.seeOffThoseWhoLeft(now);
     const income: Record<string, number> = {};
     for (const m of Object.values(this.town.merchants)) income[m.id] = m.townIncome;
     near.log(`EVENT_JSON:${JSON.stringify({ standard: 'brambleford', version: '1.0.0', event: 'hours_passed', data: [{ hours, day: this.town.day, hour: this.town.hour, purse: this.town.purse, last_hour_income: income }] })}`);
@@ -170,10 +214,14 @@ export class Brambleford {
     const me = near.predecessorAccountId();
     this.catchUp(CATCH_UP.duringAction);
     const p = this.welcome(me);
+    // Someone the town had given up as gone is started off again, as a newcomer would be.
+    const gift = Rules.welcomeBack(this.town, p);
+    if (gift) emit('mt_transfer', [{ old_owner_id: this.townAccount, new_owner_id: me, token_ids: [COIN], amounts: [String(gift)], memo: 'a welcome back from the town' }]);
     Rules.rest(this.town, p); // also marks today as a day this player was in town
     const result = run(me, p);
     this.savePlayer(me, p);
     this.rank(me, p);
+    this.whoIsAbout()[me] = this.now();
     return result;
   }
 
@@ -204,7 +252,8 @@ export class Brambleford {
 
   /** Gather once, or several swings in a row (`times`), stopping when energy runs out. */
   @call({})
-  gather({ good, times }: { good: GoodId; times?: number }): ActionResult {
+  gather({ good: sent, times }: { good: GoodId; times?: number }): ActionResult {
+    const good = word<GoodId>(sent);
     return this.act((me, p) => {
       const swings = Math.max(1, Math.min(20, Math.floor(times ?? 1)));
       let count = 0;
@@ -222,7 +271,8 @@ export class Brambleford {
   }
 
   @call({})
-  sell({ merchant, good, amount }: { merchant: MerchantId; good: GoodId; amount?: number }): ActionResult {
+  sell({ merchant: shopSent, good: sent, amount }: { merchant: MerchantId; good: GoodId; amount?: number }): ActionResult {
+    const merchant = word<MerchantId>(shopSent), good = word<GoodId>(sent);
     return this.act((me, p) => {
       const r = Rules.sell(this.town, p, merchant, good, Math.max(1, Math.min(999, Math.floor(amount ?? 1))), me);
       if (r.ok) {
@@ -239,7 +289,8 @@ export class Brambleford {
   }
 
   @call({})
-  buy({ merchant, good }: { merchant: MerchantId; good: GoodId }): ActionResult {
+  buy({ merchant: shopSent, good: sent }: { merchant: MerchantId; good: GoodId }): ActionResult {
+    const merchant = word<MerchantId>(shopSent), good = word<GoodId>(sent);
     return this.act((me, p) => {
       const r = Rules.buy(this.town, p, merchant, good);
       if (r.ok) {
@@ -254,7 +305,8 @@ export class Brambleford {
   }
 
   @call({})
-  eat({ good }: { good: GoodId }): ActionResult {
+  eat({ good: sent }: { good: GoodId }): ActionResult {
+    const good = word<GoodId>(sent);
     return this.act((me, p) => {
       const r = Rules.eat(this.town, p, good);
       if (r.ok) {
@@ -266,7 +318,8 @@ export class Brambleford {
   }
 
   @call({})
-  invest({ merchant }: { merchant: MerchantId }): ActionResult {
+  invest({ merchant: shopSent }: { merchant: MerchantId }): ActionResult {
+    const merchant = word<MerchantId>(shopSent);
     return this.act((me, p) => {
       const r = Rules.invest(this.town, p, me, merchant);
       if (r.ok) {
@@ -288,6 +341,23 @@ export class Brambleford {
     if (!id) fail('Only a shopkeeper can change their own plan.');
     this.catchUp(CATCH_UP.duringAction);
     return Rules.setPlan(this.town, this.town.merchants[id], target ?? {}, plan, thinker ?? '');
+  }
+
+  /**
+   * For the town's own account only. Puts players who joined before the town kept a list
+   * of who is about onto that list, as if each had been seen just now. Returns how many were added.
+   */
+  @call({})
+  note_players({ ids }: { ids: string[] }): number {
+    if (near.predecessorAccountId() !== near.currentAccountId()) fail('Only the town itself may do that.');
+    const about = this.whoIsAbout();
+    let added = 0;
+    for (const id of Array.isArray(ids) ? ids : []) {
+      if (typeof id !== 'string' || Object.prototype.hasOwnProperty.call(about, id) || !this.loadPlayer(id)) continue;
+      about[id] = this.now();
+      added += 1;
+    }
+    return added;
   }
 
   // ── Reading the town ──────────────────────────────────────────────────────
@@ -427,6 +497,10 @@ export class Brambleford {
     this.savePlayer(to, receiver);
     this.rank(from, sender);
     this.rank(to, receiver);
+    // Both are on the list of who is about from now, so coins sent to someone who has left do not sit idle for ever.
+    const about = this.whoIsAbout();
+    about[from] = this.now();
+    if (!Object.prototype.hasOwnProperty.call(about, to)) about[to] = this.now();
     emit('mt_transfer', [{ old_owner_id: from, new_owner_id: to, token_ids: tokens, amounts, ...(memo ? { memo } : {}) }]);
   }
 

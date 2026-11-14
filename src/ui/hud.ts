@@ -435,7 +435,8 @@ export class Hud {
       <h3>Richest in Brambleford</h3>
       <ol class="rich">${rows.map((r, i) => this.richRow(i + 1, r)).join('')}${rows.some((r) => r.me) ? '' : this.richRow('', own)}</ol>
       <footer><span>The first to bring a shopkeeper all that an order asks for earns the bonus, on top of the price.<br />
-      Your worth is your coins, your goods at their usual price, and ${TOWN.investCost / TOWN.investPct} coins for each 1% of a shop you own.</span></footer>`;
+      Your worth is your coins, your goods at their usual price, and ${TOWN.investCost / TOWN.investPct} coins for each 1% of a shop you own.${w.mode === 'chain' ? `<br />
+      Coin does not sit idle here: leave town for more than ${TOWN.idleCoinHours} hours and your coins go back to the townsfolk. Your goods and your shares in shops are kept.` : ''}</span></footer>`;
   }
 
   private onClick(ev: MouseEvent) {

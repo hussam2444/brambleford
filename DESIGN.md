@@ -44,6 +44,10 @@ Reference feel: Stardew Valley's town and shops. Not a trading terminal.
   days later and reopen it from their own purse.
 - Supply shocks (blight, a mine collapse, a salmon run) arrive on their own and
   move prices for a few days.
+- Coin does not sit idle. A player who has done nothing for three real hours
+  has left town, and their coins go back to the townsfolk; their goods and
+  shares are kept, and they are started off again with 20 coins on return.
+  A town with a fixed number of coins dies otherwise, 20 coins at a time.
 - A part-owner is paid their share of the profit on days they are about. One
   who has done nothing in town for more than three days is away, and their cut
   goes to the townsfolk until they are back.

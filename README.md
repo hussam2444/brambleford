@@ -42,6 +42,7 @@ town is live on NEAR testnet at
 | Your standing, and the richest players in town | Worked out by the contract from balances and shop shares, and kept as a top-ten list in its state |
 | The town carries on while you are away | A timer calls the contract's `tick` every ten minutes and moves an empty town three game hours each time |
 | Sign in with Google (optional) | One NEAR account per Google identity. Each browser you sign in on gets its own key on that account, limited to this game's methods |
+| Coins that do not vanish with players who wander off | The town has 2,200 coins and no more. A player who has done nothing for three hours has left town: the contract moves their coins back to the townsfolk, with an `mt_transfer` event. Their goods and shop shares stay theirs, and they are given a newcomer's 20 coins when they come back |
 | "Why this price" tooltip | The same pricing file the contract runs (`src/economy/pricing.ts`) |
 
 The contract has no copy of the rules. It imports `src/economy/town.ts` and
@@ -127,6 +128,11 @@ To keep one player on every device, press **Esc** and choose **Sign in with
 Google**. It is optional: without it you play as a guest whose key lives in
 this browser.
 
+Coin does not sit idle in Brambleford. If you do nothing for more than three
+hours, the town takes you to have left and your coins go back to the
+townsfolk. Your goods and your shares in shops are kept, and you are given 20
+coins again when you return. Buying into a shop is how you keep what you earn.
+
 The town on NEAR is shared and keeps its own calendar, so you may arrive at
 any hour, even at night when the shops are shut (they open at 6). The day shown
 at the top left is counted from your own arrival. **Esc** opens a menu with the
@@ -181,11 +187,11 @@ step 1 installs quickly.
 1. `npm run setup:contract` installs the contract's tools (near-sdk-js, near-workspaces).
 2. `npm run build:contract` builds `contract/build/brambleford.wasm`.
 3. `npm run test:contract` deploys it to a local sandbox and plays a short game.
-   **See:** 45 lines starting `PASS`, then `All checks passed`. They cover
+   **See:** 52 lines starting `PASS`, then `All checks passed`. They cover
    joining, gathering, selling, buying, eating, conservation of coins, the
    shopkeeper-only `set_plan`, wanted orders and their bonus, the richest list,
-   a part-owner who goes away and comes back, NEP-245 transfers, and the hourly
-   tick with its gas use.
+   a part-owner who goes away and comes back, a player who leaves town and
+   returns, NEP-245 transfers, and the hourly tick with its gas use.
 4. `npm run sandbox` starts a sandbox chain with the town deployed and leaves it
    running. **See:** `Wrote .env.local`.
 5. In a second terminal, `npm run dev`, and in a third, `npm run test:api`
@@ -228,7 +234,7 @@ and a half minutes.
 | Command | What it checks | Needs |
 |---|---|---|
 | `npm test` | The types, a two-week run of the economy, the shared rules (`test:rules`), the back end with the model and the chain stood in (`test:server`, 211 checks), and the Google sign-in checks (`test:google`, 25 checks) | Nothing but `npm install` |
-| `npm run test:contract` | 45 checks against the real contract on a local sandbox chain | `npm run setup:contract`, `npm run build:contract` |
+| `npm run test:contract` | 52 checks against the real contract on a local sandbox chain (it fast-forwards the chain by hours, so allow five minutes) | `npm run setup:contract`, `npm run build:contract` |
 | `OLD_WASM=<an older build> npm run test:contract` | The same, plus an upgrade rehearsal: a town started by the older contract, then the new code deployed over it | An older `brambleford.wasm` |
 | `npm run test:api` | The HTTP API end to end: a guest joins, signs, is relayed; a shopkeeper plans; two browsers share one signed-in player | `npm run sandbox` and `npm run dev` running |
 | `npm run play:order -- <address>` | One guest with no screen fills a wanted order through the public API | The hosted game, or a sandbox and dev server |
@@ -256,12 +262,15 @@ and a half minutes.
 - **NEAR Intents** is not used.
 - **The hosted game has not been load-tested**, and one relayer account
   signs everything, so many simultaneous players would queue.
-- **Balance.** Coins a player hoards leave circulation. With many long-term
-  players the townsfolk's purse would run low. One leak is closed: a part-owner
-  who has done nothing in town for more than three game days is paid no
-  dividend, and their cut goes to the townsfolk instead, so profits do not pile
-  up with people who have left. They keep their share and are paid again when
-  they come back.
+- **Balance.** The town's 2,200 coins have to go round, so it cannot afford
+  to lose them to people who leave. Two rules see to that. A player who has
+  done nothing for three real hours has left town, and their coins go back to
+  the townsfolk (goods and shares are kept, and a return is greeted with 20
+  coins). A part-owner who has done nothing for more than three game days is
+  paid no dividend until they are back. What these do not cover: a player who
+  stays, only earns and never spends can still gather most of the town's coins.
+  Shops then shut until that player buys into them, which is the game working
+  as meant, but nothing forces it.
 - **Cost.** The contract is JavaScript (near-sdk-js), so each call burns about
   15 TGas before doing anything. Keeping the town ticking costs the relayer
   roughly 0.6 to 0.8 testnet NEAR per hour of active play, and the timer about
