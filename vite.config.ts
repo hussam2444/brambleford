@@ -22,4 +22,5 @@ function api(): Plugin {
   };
 }
 
-export default defineConfig({ plugins: [api()] });
+// A fixed port, so `npm run test:api` knows where to find the dev server.
+export default defineConfig({ plugins: [api()], server: { port: 5183 } });

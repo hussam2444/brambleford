@@ -77,7 +77,9 @@ step 1 installs quickly.
    shopkeeper-only `set_plan`, NEP-245 transfers, and the hourly tick with its gas use.
 4. `npm run sandbox` starts a sandbox chain with the town deployed and leaves it
    running. **See:** `Wrote .env.local`.
-5. In a second terminal, `npm run dev`, and in a third, `npm run test:api`.
+5. In a second terminal, `npm run dev`, and in a third, `npm run test:api`
+   (if the dev server printed an address other than `http://localhost:5183`,
+   add it: `npm run test:api -- http://localhost:5174`).
    **See:** an account is created, `gather` and `sell` return `"ok":true`, the
    line `player account holds 0 yoctoNEAR (the relayer paid for everything)`,
    and `baker now {…"plan":"Coin is tight, so I am buying in less wheat."…}`,
