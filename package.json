@@ -16,6 +16,7 @@
     "dev:testnet": "vite --mode testnet",
     "test:api": "tsx scripts/e2e-api.ts",
     "test:server": "tsx scripts/server-test.ts",
+    "play:order": "tsx scripts/play-order.ts",
     "setup:contract": "npm --prefix contract install",
     "host": "tsx scripts/host.ts"
   },
