@@ -31,6 +31,8 @@ export interface GameWorld {
   drainNews(): string[];
   /** Which day this is for the player: 1 on the day they arrived, however old the town is. */
   dayNumber(): number;
+  /** A public page listing this player's transactions, when the town is on a public chain. */
+  explorerUrl(): string | null;
   /** What starting over means here, in a sentence, and doing it (the page reloads). */
   startOverNote(): string;
   startOver(): void;
@@ -127,6 +129,10 @@ export class LocalWorld implements GameWorld {
 
   totalCoins() {
     return Rules.totalCoins(this.town, [this.player]);
+  }
+
+  explorerUrl() {
+    return null;
   }
 
   startOverNote() {

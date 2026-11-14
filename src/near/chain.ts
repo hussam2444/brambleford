@@ -140,6 +140,10 @@ export class ChainWorld implements GameWorld {
     return `${where} · ${name} · ${this.busy || this.queue.length ? 'saving…' : this.lost ? 'reconnecting…' : 'saved'}`;
   }
 
+  explorerUrl() {
+    return NETWORK === 'testnet' ? `https://testnet.nearblocks.io/address/${this.me}` : null;
+  }
+
   startOverNote() {
     return 'You get a brand new player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. Your old player and everything they own stay behind for good.';
   }

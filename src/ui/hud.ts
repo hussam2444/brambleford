@@ -213,6 +213,7 @@ export class Hud {
   }
 
   private renderMenu(confirming: boolean) {
+    const explorer = this.world.explorerUrl();
     const keys: [string, string][] = [
       ['W A S D', 'or the arrow keys: walk'],
       ['E', 'or Space: gather, talk. Hold to keep gathering'],
@@ -235,7 +236,8 @@ export class Hud {
            ${this.world.mode === 'local' && chainConfigured() && practiceRequested() ? '<button class="act" data-act="practice-off">Go to the town on NEAR</button>' : ''}
          </div>
          <dl class="menu-keys">${keys.map(([k, what]) => `<dt><kbd>${k}</kbd></dt><dd>${what}</dd>`).join('')}</dl>
-         <p class="menu-note">${this.world.status()}${this.world.mode === 'chain' ? `<br />This is your day ${this.world.dayNumber()}. The town itself is on day ${this.world.town.day}.` : ''}</p>`;
+         <p class="menu-note">${this.world.status()}${this.world.mode === 'chain' ? `<br />This is your day ${this.world.dayNumber()}. The town itself is on day ${this.world.town.day}.` : ''}</p>
+         ${explorer ? `<p class="menu-note"><a href="${explorer}" target="_blank" rel="noopener">See every move you have made on the NEAR explorer ↗</a></p>` : ''}`;
     this.el.menu.innerHTML = `<h2>Brambleford</h2>${body}`;
   }
 
