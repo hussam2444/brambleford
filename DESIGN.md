@@ -12,8 +12,8 @@ Reference feel: Stardew Valley's town and shops. Not a trading terminal.
 | Timescale | What the player does | What they feel |
 |---|---|---|
 | Every 30 seconds | Swing at a rock, tree, wheat patch or fishing spot; or walk to a shop and sell | "I got something, and the price moved because of me" |
-| Every 2 to 3 minutes (one game day) | Spend the day's energy, pick who to sell to, buy bread to keep going, read the day's news | "I timed that well" or "I should have waited" |
-| Every session | Buy tools to gather faster, buy into a shop for a share of its profit, rescue a shop that went under | "Part of this town is mine" |
+| Every 2 to 3 minutes (one game day) | Read the notice board, fill a shopkeeper's order for the bonus, spend the day's energy, pick who to sell to, buy bread to keep going | "I timed that well" or "I should have waited" |
+| Every session | Buy tools to gather faster, buy into a shop for a share of its profit, rescue a shop that went under, climb from Newcomer to Alderman | "Part of this town is mine" |
 
 ## First minute (no tutorial screen)
 
@@ -44,6 +44,15 @@ Reference feel: Stardew Valley's town and shops. Not a trading terminal.
   days later and reopen it from their own purse.
 - Supply shocks (blight, a mine collapse, a salmon run) arrive on their own and
   move prices for a few days.
+- Each morning the shopkeepers shortest of something pin an order to the
+  notice board. Whoever brings all of it first is paid a bonus out of that
+  shopkeeper's own purse, so no coin is made.
+- A player's standing is their worth (coins, goods at their usual price, and
+  shop shares) and how many shops they own part of: Newcomer, Trader,
+  Merchant, Burgher, Alderman.
+- Once a day each shopkeeper may change how much it keeps on the shelf. A
+  language model decides, shown only that shop's books, and its answer is held
+  to small steps inside fixed limits. The shopkeeper's own account signs it.
 
 ## What "you never notice the chain" means here
 
@@ -51,7 +60,9 @@ Reference feel: Stardew Valley's town and shops. Not a trading terminal.
 |---|---|
 | The game just starts | A NEAR account is created for the browser's key |
 | Items in a bag | NEP-245 multi-token balances in one contract |
-| A shopkeeper with a purse | A NEAR account with its own key; only it can change its plan |
+| A shopkeeper with a purse and a plan | A NEAR account with its own key; only it can change its plan, and the chain records which model thought it through |
+| An order on the notice board | Part of the town's state in the contract; the bonus is a transfer from the shopkeeper's balance |
+| "Sign in with Google" (optional) | One NEAR account per person, with a key for each browser they use |
 | Selling an item | One gasless transaction, sent by our relayer |
 | "You own 25% of the bakery" | A share token in the same contract |
 
@@ -59,9 +70,10 @@ Reference feel: Stardew Valley's town and shops. Not a trading terminal.
 
 Built: the playable town, the economy, the NEAR contract (live on testnet at
 `brambleford.testnet`), guest accounts with no wallet, gasless trades, the
-time-lapse, and shopkeepers that revise their own plans each morning and sign
-them with their own keys.
+time-lapse, wanted orders and standing, optional sign-in with Google,
+shopkeepers whose daily plan is made by a model on NEAR AI Cloud and signed
+with their own keys, and a timer that keeps the town's hours with nobody there.
 
-Not built: sign-in with Google or email, other players visible in the same
-town, a "while you were away" summary, a fifth shop, crafting by the player.
-The README lists the known limits.
+Not built: other players visible in the same town, a "while you were away"
+summary, a fifth shop, crafting by the player, talking to a shopkeeper in your
+own words. The README lists the known limits.

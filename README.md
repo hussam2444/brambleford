@@ -25,8 +25,8 @@ town is live on NEAR testnet at
 
 | | |
 |---|---|
-| ![The shop street by day](docs/town-day.jpg) | ![A shop panel showing prices and the shopkeeper's own plan](docs/shop-plan.jpg) |
-| ![The time-lapse: a week of prices charted in a minute](docs/time-lapse.jpg) | ![The square at night](docs/title-night.jpg) |
+| ![The shop street by day](docs/town-day.jpg) | ![A shop panel on the live town: prices, the shopkeeper's plan, the account that signed it and the model that thought it through](docs/shop-plan.jpg) |
+| ![The notice board: what the shopkeepers want today, the bonus, and the richest players](docs/notice-board.jpg) | ![The time-lapse: a week of prices charted in a minute](docs/time-lapse.jpg) |
 
 ## What NEAR does here
 
