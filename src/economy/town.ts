@@ -10,8 +10,8 @@
 // Coins are never created or destroyed. They only move between shopkeepers,
 // the townsfolk's shared purse and players.
 
-import { GOODS, type GoodId } from './goods';
-import { quoteBuy, quoteSell } from './pricing';
+import { GOODS, GOOD_IDS, type GoodId } from './goods';
+import { RULES, quoteBuy, quoteSell } from './pricing';
 
 export type MerchantId = 'blacksmith' | 'baker' | 'fishmonger' | 'carpenter';
 export const MERCHANT_IDS: MerchantId[] = ['blacksmith', 'baker', 'fishmonger', 'carpenter'];
@@ -34,6 +34,8 @@ export interface Merchant {
   plan: string;
   /** The day the shopkeeper last changed their plan. */
   plannedOn?: number;
+  /** Who worked the current plan out, in a few words, if the shopkeeper said. Plans made before this existed have none. */
+  thinker?: string;
   recipe: Recipe;
   /** Townsfolk purchases per hour at the normal price. */
   usualSales: Partial<Record<GoodId, number>>;
@@ -87,6 +89,28 @@ export interface Season {
   headline: string;
 }
 
+/** A request on the notice board: bring this shopkeeper enough of something today, and earn a bonus. */
+export interface Order {
+  id: number;
+  /** The day it went up. It lapses at the next dawn. */
+  day: number;
+  merchant: MerchantId;
+  good: GoodId;
+  wanted: number;
+  /** Paid from the shopkeeper's own purse to whoever fills the order first. */
+  bonus: number;
+  /** How many each player has brought so far, by player id. */
+  progress: Record<string, number>;
+  /** The player who filled it, once someone has. */
+  wonBy?: string;
+}
+
+/** One line of the "richest players" list. */
+export interface Rank {
+  id: string;
+  worth: number;
+}
+
 export interface Town {
   day: number;
   hour: number;
@@ -97,6 +121,8 @@ export interface Town {
   eventSeq: number;
   /** At most one supply shock runs at a time. */
   season: Season | null;
+  /** What is on the notice board. A town begun before orders existed has none until its next dawn. */
+  orders?: Order[];
 }
 
 export interface ActionResult {
@@ -106,6 +132,8 @@ export interface ActionResult {
   price?: number;
   /** How many units changed hands. */
   count?: number;
+  /** Coins a shopkeeper paid on top, when a sale filled their order. */
+  bonus?: number;
 }
 
 export type Rng = () => number;
@@ -139,6 +167,22 @@ export const TOWN = {
   demandElasticity: 1.3,
   keepEvents: 12,
   keepNotices: 6,
+  /** Wanted orders: at most this many go up each morning, one to a shopkeeper. */
+  ordersPerDay: 2,
+  /** The first order always goes up. A second needs another shop holding less than this share of what it likes to keep. */
+  orderShortBelow: 0.9,
+  /** An order never asks for fewer than this, or more than that. */
+  orderMin: 4,
+  orderMax: 12,
+  /** The bonus, as a share of what the goods asked for cost at the normal price, and the least it can be. */
+  orderBonusShare: 0.6,
+  orderBonusMin: 5,
+  /** A shopkeeper only posts an order if they could pay its bonus and still have this much in the till. */
+  orderCushion: 60,
+  /** A player with no share in any shop is called a trader once they are worth this much. */
+  traderWorth: 100,
+  /** How many players the "richest" list remembers. */
+  keepRichest: 10,
 };
 
 /** Small seedable random generator so a run can be replayed exactly. */
@@ -160,7 +204,7 @@ function makeMerchant(m: Setup): Merchant {
 }
 
 export function newTown(): Town {
-  return {
+  const town: Town = {
     day: 1,
     hour: TOWN.openHour,
     purse: 1200,
@@ -206,6 +250,8 @@ export function newTown(): Town {
       }),
     },
   };
+  postOrders(town); // a new town opens on its first morning, so the board should not be bare
+  return town;
 }
 
 /** A newcomer arrives. Their first coins are a gift from the townsfolk's purse. */
@@ -280,6 +326,9 @@ function shopOf(town: Town, id: MerchantId): Merchant | undefined {
 
 const owns = (bag: object, key: string) => Object.prototype.hasOwnProperty.call(bag, key);
 
+/** A count kept under a player's id, or 0. Never fooled by names every JavaScript object has. */
+const tally = (bag: Record<string, number>, id: string) => (owns(bag, id) ? bag[id] : 0);
+
 function add(bag: Partial<Record<GoodId, number>>, good: GoodId, n: number) {
   bag[good] = Math.max(0, (bag[good] ?? 0) + n);
 }
@@ -294,6 +343,59 @@ export function notify(p: Player, text: string) {
   p.noticeSeq += 1;
   p.notices.push({ seq: p.noticeSeq, text });
   while (p.notices.length > TOWN.keepNotices) p.notices.shift();
+}
+
+/**
+ * A short name for a player, for town news and the notice board. An account id
+ * is long and means nothing to a reader, so only four characters of it are
+ * shown: "g57748bfc0a1b2c3d.brambleford-folk.testnet" is "Traveller 5774".
+ * The practice town's one player, "you", is simply "A traveller".
+ */
+export function friendlyName(playerId: string): string {
+  const own = String(playerId ?? '').split('.')[0];
+  const tag = own.slice(1, 5).replace(/[^a-z0-9]/gi, '');
+  return own === 'you' || !tag ? 'A traveller' : `Traveller ${tag}`;
+}
+
+// ── Standing ────────────────────────────────────────────────────────────────
+
+/** The ladder of titles, lowest rung first, and what it takes to reach each one. */
+export const TITLES = [
+  { name: 'Newcomer', needs: 'arrive in town' },
+  { name: 'Trader', needs: `be worth ${TOWN.traderWorth} coins` },
+  { name: 'Merchant', needs: 'own a share in a shop' },
+  { name: 'Burgher', needs: 'own a share in two shops' },
+  { name: 'Alderman', needs: 'own a share in all four shops' },
+];
+
+/** What a player is worth: their coins, their goods at the normal price, and their shares at what a share costs. */
+export function netWorth(town: Town, p: Player, playerId: string): number {
+  let worth = p.coins;
+  for (const good of GOOD_IDS) worth += GOODS[good].base * (p.inventory[good] ?? 0);
+  const perPercent = TOWN.investCost / TOWN.investPct;
+  for (const m of Object.values(town.merchants)) worth += tally(m.holders, playerId) * perPercent;
+  return worth;
+}
+
+/** How many of the shops a player owns a share in. */
+export function shopsHeld(town: Town, playerId: string): number {
+  let held = 0;
+  for (const m of Object.values(town.merchants)) if (tally(m.holders, playerId) > 0) held += 1;
+  return held;
+}
+
+/** A player's title. Owning part of the town counts for more than coin: without a share, the best is Trader. */
+export function titleOf(worth: number, held: number): string {
+  const rung = held >= MERCHANT_IDS.length ? 4 : held >= 2 ? 3 : held >= 1 ? 2 : worth >= TOWN.traderWorth ? 1 : 0;
+  return TITLES[rung].name;
+}
+
+/** The "richest players" list with one player's worth brought up to date: richest first, and only the top few. */
+export function ranked(list: Rank[], id: string, worth: number): Rank[] {
+  const out = list.filter((r) => r.id !== id);
+  out.push({ id, worth });
+  out.sort((a, b) => b.worth - a.worth || (a.id < b.id ? -1 : 1));
+  return out.slice(0, TOWN.keepRichest);
 }
 
 // ── One hour passes ─────────────────────────────────────────────────────────
@@ -422,6 +524,7 @@ function dawn(town: Town, rng: Rng) {
     // Some days the town wants bread; some days nobody does. No two days are alike.
     m.bustle = TOWN.quietDay + rng() * (TOWN.busyDay - TOWN.quietDay);
   }
+  postOrders(town);
 
   if (town.season) {
     town.season.daysLeft -= 1;
@@ -437,6 +540,69 @@ function dawn(town: Town, rng: Rng) {
   announce(town, 'news', pick.headline);
 }
 
+// ── Wanted orders ───────────────────────────────────────────────────────────
+//
+// Each morning the shopkeepers shortest of something ask for it on the notice
+// board. Whoever brings the full amount first that day is paid a bonus, out of
+// the shopkeeper's own purse, on top of the price of the goods.
+
+/** The orders that went up this morning. From midnight until the shops open there are none. */
+export function todaysOrders(town: Town): Order[] {
+  return (town.orders ?? []).filter((o) => o.day === town.day);
+}
+
+/** Take down the orders of earlier days and pin up today's. Uses no randomness: the town's books decide. */
+function postOrders(town: Town) {
+  const orders = (town.orders ?? []).filter((o) => o.day >= town.day);
+
+  // Everything any open shop buys, with how well stocked the shop is in it (1 = just what it likes to keep).
+  const asks: { m: Merchant; good: GoodId; stocked: number }[] = [];
+  for (const m of Object.values(town.merchants)) {
+    if (!m.open) continue;
+    for (const id of Object.keys(m.usualSupply)) {
+      const good = id as GoodId;
+      asks.push({ m, good, stocked: (m.stock[good] ?? 0) / Math.max(1, m.target[good] ?? 1) });
+    }
+  }
+  const shortestFirst = asks.map((ask, at) => ({ ...ask, at })).sort((a, b) => a.stocked - b.stocked || a.at - b.at);
+
+  for (const { m, good, stocked } of shortestFirst) {
+    if (orders.length >= TOWN.ordersPerDay) break;
+    // The first order always goes up, even on a day when nobody is short. Any more need a shop that is.
+    if (orders.length > 0 && stocked >= TOWN.orderShortBelow) break;
+    if (orders.some((o) => o.merchant === m.id)) continue;
+    const stock = m.stock[good] ?? 0;
+    const target = m.target[good] ?? 1;
+    const wanted = Math.min(TOWN.orderMax, Math.max(TOWN.orderMin, target - stock));
+    const bonus = Math.max(TOWN.orderBonusMin, Math.round(wanted * GOODS[good].base * TOWN.orderBonusShare));
+    if (m.coins < bonus + TOWN.orderCushion) continue; // cannot spare the bonus
+    if (stock + wanted > target * RULES.fullAtTimesTarget) continue; // has no room for that many
+    orders.push({ id: town.day * 10 + orders.length + 1, day: town.day, merchant: m.id, good, wanted, bonus, progress: {} });
+  }
+  town.orders = orders;
+}
+
+/**
+ * Count a sale towards the shopkeeper's order for that good, if there is one still open today.
+ * Returns the bonus paid if this sale filled the order, otherwise 0.
+ */
+function countTowardsOrder(town: Town, m: Merchant, p: Player, playerId: string, good: GoodId, count: number): number {
+  const order = todaysOrders(town).find((o) => o.merchant === m.id && o.good === good && o.wonBy === undefined);
+  if (!order) return 0;
+  const brought = tally(order.progress, playerId) + count;
+  order.progress[playerId] = brought;
+  if (brought < order.wanted) return 0;
+
+  // The bonus is the shopkeeper's own money changing hands, so no coin is made or lost.
+  const bonus = Math.min(order.bonus, m.coins);
+  m.coins -= bonus;
+  p.coins += bonus;
+  order.wonBy = playerId;
+  notify(p, `${m.name} paid you a ${bonus}-coin bonus for filling today's order.`);
+  announce(town, 'news', `${friendlyName(playerId)} filled ${m.name}'s order for ${order.wanted} ${GOODS[good].plural}.`);
+  return bonus;
+}
+
 // ── What a player can do ────────────────────────────────────────────────────
 
 export function gather(town: Town, p: Player, good: GoodId): ActionResult {
@@ -450,8 +616,11 @@ export function gather(town: Town, p: Player, good: GoodId): ActionResult {
   return { ok: true, count: n, message: `+${n} ${GOODS[good].plural}` };
 }
 
-/** Sell up to `amount` of something to a shop, one at a time, so each sale moves the next price. */
-export function sell(town: Town, p: Player, merchantId: MerchantId, good: GoodId, amount = 1): ActionResult {
+/**
+ * Sell up to `amount` of something to a shop, one at a time, so each sale moves the next price.
+ * `playerId` says who is selling, so the sale can count towards a wanted order.
+ */
+export function sell(town: Town, p: Player, merchantId: MerchantId, good: GoodId, amount = 1, playerId = ''): ActionResult {
   const m = shopOf(town, merchantId);
   if (!m) return { ok: false, message: 'No such shop.' };
   if (!isTradingHour(town)) return { ok: false, message: `${m.name} has gone to bed.` };
@@ -471,7 +640,10 @@ export function sell(town: Town, p: Player, merchantId: MerchantId, good: GoodId
   }
   if (!count) return { ok: false, message: stop };
   p.stats.sold += count;
-  return { ok: true, count, price: total, message: `Sold ${count} for ${total}` };
+  const result: ActionResult = { ok: true, count, price: total, message: `Sold ${count} for ${total}` };
+  const bonus = countTowardsOrder(town, m, p, playerId, good, count);
+  if (bonus) result.bonus = bonus;
+  return result;
 }
 
 export function buy(town: Town, p: Player, merchantId: MerchantId, good: GoodId): ActionResult {
@@ -509,7 +681,8 @@ export function invest(town: Town, p: Player, playerId: string, merchantId: Merc
   if (p.coins < TOWN.investCost) return { ok: false, message: `You need ${TOWN.investCost} coins to buy in.` };
   p.coins -= TOWN.investCost;
   m.coins += TOWN.investCost;
-  m.holders[playerId] = (m.holders[playerId] ?? 0) + TOWN.investPct;
+  m.holders[playerId] = tally(m.holders, playerId) + TOWN.investPct;
+  announce(town, 'news', `${friendlyName(playerId)} bought into ${m.name}'s shop.`);
   if (!m.open) {
     m.open = true;
     m.missedRent = 0;
@@ -525,14 +698,16 @@ export function invest(town: Town, p: Player, playerId: string, merchantId: Merc
 /**
  * A shopkeeper changes how much they like to keep on the shelf.
  * On chain, only the shopkeeper's own account may call this.
+ * `thinker` is a few words on who worked the plan out; a plan sent without one clears the last.
  */
-export function setPlan(town: Town, m: Merchant, target: Partial<Record<GoodId, number>>, plan: string): ActionResult {
+export function setPlan(town: Town, m: Merchant, target: Partial<Record<GoodId, number>>, plan: string, thinker = ''): ActionResult {
   for (const [id, n] of Object.entries(target)) {
     if (!owns(m.target, id)) return { ok: false, message: `${m.name} does not stock ${id}.` };
     if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > 40) return { ok: false, message: 'Shelf targets must be whole numbers from 1 to 40.' };
   }
   Object.assign(m.target, target);
   m.plan = String(plan ?? '').slice(0, 240);
+  m.thinker = String(thinker ?? '').slice(0, 60);
   m.plannedOn = town.day;
   return { ok: true, message: 'Plan updated.' };
 }

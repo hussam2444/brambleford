@@ -13,7 +13,7 @@
 import { Account, JsonRpcProvider, KeyPair, actions, encodeSignedDelegate, teraToGas, type KeyPairString } from 'near-api-js';
 import type { GoodId } from '../economy/goods';
 import * as Rules from '../economy/town';
-import type { ActionResult, GameWorld, MerchantId, Player, Town } from '../economy/world';
+import { standings, type ActionResult, type GameWorld, type MerchantId, type Player, type Town } from '../economy/world';
 
 const CONTRACT = import.meta.env.VITE_NEAR_CONTRACT_ID as string | undefined;
 const RPC = (import.meta.env.VITE_NEAR_RPC_URL as string | undefined) ?? 'https://test.rpc.fastnear.com';
@@ -30,6 +30,8 @@ interface Snapshot {
   next_tick_at: number;
   now: number;
   player: Player | null;
+  /** The richest players, as the contract last counted them. A contract from before the list existed sends none. */
+  richest?: Rules.Rank[];
 }
 
 interface Job {
@@ -97,6 +99,8 @@ export class ChainWorld implements GameWorld {
   private extraNews: string[] = [];
   /** The town's day when this player first arrived. Their own count starts from there. */
   private arrivedOn = 1;
+  /** The richest players, from the latest read of the chain. */
+  private topPlayers: Rules.Rank[] = [];
 
   constructor(private account: Account, private provider: JsonRpcProvider, private contractId: string) {
     this.me = account.accountId;
@@ -173,6 +177,9 @@ export class ChainWorld implements GameWorld {
     this.player = snap.player!;
     this.nextTickAt = snap.next_tick_at;
     this.skew = snap.now - Date.now();
+    // Kept for the notice board, which redraws every hour. It is left out of `seen` so that
+    // another player's every swing at a rock does not redraw this player's panels.
+    this.topPlayers = Array.isArray(snap.richest) ? snap.richest : [];
     const seen = JSON.stringify([snap.town, snap.player]);
     if (seen !== this.lastSeen) {
       this.lastSeen = seen;
@@ -288,7 +295,7 @@ export class ChainWorld implements GameWorld {
     return this.act('gather', { good, times: 1 }, () => Rules.gather(this.town, this.player, good));
   }
   sell(merchant: MerchantId, good: GoodId, amount = 1) {
-    return this.act('sell', { merchant, good, amount }, () => Rules.sell(this.town, this.player, merchant, good, amount));
+    return this.act('sell', { merchant, good, amount }, () => Rules.sell(this.town, this.player, merchant, good, amount, this.me));
   }
   buy(merchant: MerchantId, good: GoodId) {
     return this.act('buy', { merchant, good }, () => Rules.buy(this.town, this.player, merchant, good));
@@ -298,5 +305,25 @@ export class ChainWorld implements GameWorld {
   }
   invest(merchant: MerchantId) {
     return this.act('invest', { merchant }, () => Rules.invest(this.town, this.player, this.me, merchant));
+  }
+
+  // ── The notice board ──────────────────────────────────────────────────────
+
+  orders() {
+    return Rules.todaysOrders(this.town);
+  }
+
+  private worth() {
+    return Rules.netWorth(this.town, this.player, this.me);
+  }
+
+  /** The chain's list of rich players, with this player's own row worked out afresh, and the shopkeepers. */
+  richest() {
+    const others = this.topPlayers.filter((r) => r.id !== this.me);
+    return standings(this.town, [...others, { id: this.me, worth: this.worth() }], this.me);
+  }
+
+  title() {
+    return Rules.titleOf(this.worth(), Rules.shopsHeld(this.town, this.me));
   }
 }

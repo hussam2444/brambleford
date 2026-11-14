@@ -7,10 +7,19 @@
 
 import type { GoodId } from './goods';
 import * as Rules from './town';
-import type { ActionResult, Merchant, MerchantId, Player, Season, Town } from './town';
+import type { ActionResult, Merchant, MerchantId, Order, Player, Rank, Season, Town } from './town';
 
-export type { ActionResult, Merchant, MerchantId, Player, Season, Town };
-export { TOWN } from './town';
+export type { ActionResult, Merchant, MerchantId, Order, Player, Season, Town };
+export { TOWN, TITLES, friendlyName } from './town';
+
+/** One row of the "richest in town" list on the notice board. */
+export interface Standing {
+  name: string;
+  worth: number;
+  kind: 'player' | 'shop';
+  /** True for the row that is this player. */
+  me: boolean;
+}
 
 export interface GameWorld {
   readonly mode: 'local' | 'chain';
@@ -44,6 +53,13 @@ export interface GameWorld {
   buy(merchant: MerchantId, good: GoodId): ActionResult;
   eat(good: GoodId): ActionResult;
   invest(merchant: MerchantId): ActionResult;
+
+  /** Today's wanted orders, as pinned to the notice board. */
+  orders(): Order[];
+  /** Players and shopkeepers on one list, richest first: the top eight. */
+  richest(): Standing[];
+  /** This player's title in town, from Newcomer up to Alderman. */
+  title(): string;
 }
 
 // Small readers shared by the screen code, whichever world is behind it.
@@ -53,6 +69,18 @@ export const gatherYield = (w: GameWorld) => Rules.gatherYield(w.player);
 export const shareOf = (w: GameWorld, m: Merchant) => (m.holders[w.me] ?? 0) / 100;
 export const canInvest = (w: GameWorld, m: Merchant) =>
   w.player.coins >= Rules.TOWN.investCost && Rules.investedPct(m) + Rules.TOWN.investPct <= Rules.TOWN.maxInvestedPct;
+/** What this player is worth: coins, goods at their usual price, and shop shares at what they cost. */
+export const worthOf = (w: GameWorld) => Rules.netWorth(w.town, w.player, w.me);
+
+/**
+ * The "richest in town" list: the players given, and the four shopkeepers, on
+ * one ladder. A shopkeeper is worth the coins in the till.
+ */
+export function standings(town: Town, players: Rank[], me: string): Standing[] {
+  const rows: Standing[] = players.map((p) => ({ name: Rules.friendlyName(p.id), worth: p.worth, kind: 'player', me: p.id === me }));
+  for (const m of Object.values(town.merchants)) rows.push({ name: m.name, worth: m.coins, kind: 'shop', me: false });
+  return rows.sort((a, b) => b.worth - a.worth).slice(0, 8);
+}
 
 export class LocalWorld implements GameWorld {
   readonly mode = 'local';
@@ -150,8 +178,13 @@ export class LocalWorld implements GameWorld {
   }
 
   gather(good: GoodId) { return Rules.gather(this.town, this.player, good); }
-  sell(merchant: MerchantId, good: GoodId, amount = 1) { return Rules.sell(this.town, this.player, merchant, good, amount); }
+  sell(merchant: MerchantId, good: GoodId, amount = 1) { return Rules.sell(this.town, this.player, merchant, good, amount, this.me); }
   buy(merchant: MerchantId, good: GoodId) { return Rules.buy(this.town, this.player, merchant, good); }
   eat(good: GoodId) { return Rules.eat(this.town, this.player, good); }
   invest(merchant: MerchantId) { return Rules.invest(this.town, this.player, this.me, merchant); }
+
+  orders() { return Rules.todaysOrders(this.town); }
+  /** A practice town has one player, so the list is that player and the four shopkeepers. */
+  richest() { return standings(this.town, [{ id: this.me, worth: worthOf(this) }], this.me); }
+  title() { return Rules.titleOf(worthOf(this), Rules.shopsHeld(this.town, this.me)); }
 }

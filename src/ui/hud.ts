@@ -3,7 +3,10 @@
 
 import { GOODS, GOOD_IDS, type GoodId } from '../economy/goods';
 import { quoteBuy, quoteSell, type Quote } from '../economy/pricing';
-import { TOWN, canInvest, isTradingHour, shareOf, type GameWorld, type Merchant, type MerchantId } from '../economy/world';
+import {
+  TITLES, TOWN, canInvest, friendlyName, isTradingHour, shareOf, worthOf,
+  type ActionResult, type GameWorld, type Merchant, type MerchantId, type Order, type Standing,
+} from '../economy/world';
 import { coinUrl, iconUrl, portraitUrl } from '../game/art';
 import { sfx } from '../game/sfx';
 import { chainConfigured, practiceRequested } from '../near/chain';
@@ -39,6 +42,7 @@ const PERKS: Partial<Record<GoodId, string>> = {
 export class Hud {
   shopOpen: MerchantId | null = null;
   menuOpen = false;
+  boardOpen = false;
   private root: HTMLElement;
   private el: Record<string, HTMLElement> = {};
   private flash: { text: string; kind: 'good' | 'bad' | '' } = { text: '', kind: '' };
@@ -56,6 +60,7 @@ export class Hud {
       <div class="status panel">
         <div class="row when"><span data-id="day"></span><span class="clock" data-id="clock"></span></div>
         <div class="row coins"><img src="${coinUrl()}" alt="" /><span data-id="coins"></span></div>
+        <div class="row rank" data-id="rank"></div>
         <div class="row"><span class="label">Energy</span><div class="energy" data-id="energyBar"><i></i></div></div>
       </div>
       <div class="goal panel" data-id="goal"></div>
@@ -79,7 +84,8 @@ export class Hud {
       <div class="toast panel" data-id="toast"></div>
       <div class="prompt panel" data-id="prompt"></div>
       <div class="bag panel" data-id="bag"></div>
-      <div class="shop-wrap" data-id="shopWrap"><div class="shop panel" data-id="shop"></div></div>`;
+      <div class="shop-wrap" data-id="shopWrap"><div class="shop panel" data-id="shop"></div></div>
+      <div class="shop-wrap" data-id="boardWrap"><div class="shop panel board" data-id="board"></div></div>`;
     this.root.querySelectorAll<HTMLElement>('[data-id]').forEach((e) => (this.el[e.dataset.id!] = e));
     this.root.addEventListener('click', (ev) => this.onClick(ev));
     this.refresh();
@@ -96,6 +102,7 @@ export class Hud {
     this.el.clock.textContent = `${night ? '☾' : '☀'} ${h}:00 ${hour < 12 ? 'am' : 'pm'}`;
     this.el.where.textContent = w.status();
     this.el.coins.textContent = String(w.player.coins);
+    this.el.rank.textContent = w.title();
     const pct = (w.player.energy / w.player.maxEnergy) * 100;
     this.el.energyBar.classList.toggle('low', pct < 20);
     (this.el.energyBar.firstElementChild as HTMLElement).style.width = `${pct}%`;
@@ -110,6 +117,7 @@ export class Hud {
     }).join('');
 
     if (this.shopOpen) this.renderShop();
+    if (this.boardOpen) this.renderBoard();
   }
 
   setPrompt(html: string | null) {
@@ -125,10 +133,18 @@ export class Hud {
   }
 
   /** The current first-minute goal, or null to put the strip away. */
-  setGoal(text: string | null, justDone = false) {
+  setGoal(text: string | null, justDone = false, label = justDone ? '✓ Done' : 'Next') {
     this.el.goal.classList.toggle('show', !!text);
     this.el.goal.classList.toggle('done', justDone);
-    if (text) this.el.goal.innerHTML = `<b>${justDone ? '✓ Done' : 'Next'}</b>${text}`;
+    if (text) this.el.goal.innerHTML = `<b>${label}</b>${text}`;
+  }
+
+  /** Once the first-minute goals are done, the strip carries an open order from the notice board. Null puts it away. */
+  setWanted(o: Order | null) {
+    const m = o && this.world.town.merchants[o.merchant];
+    if (!o || !m || !GOOD_IDS.includes(o.good)) return this.setGoal(null);
+    const brought = o.progress[this.world.me] ?? 0;
+    this.setGoal(`${m.name} needs ${o.wanted} ${GOODS[o.good].plural} today. Bonus ${o.bonus} coins. You have brought ${brought} of ${o.wanted}.`, false, 'Wanted');
   }
 
   /** Point every panel at a different town (the time-lapse swaps in a copy). */
@@ -230,6 +246,7 @@ export class Hud {
          </div>`
       : `<div class="menu-buttons">
            <button class="act gold" data-act="menu-close">Back to town</button>
+           <button class="act" data-act="board-open">Notice board</button>
            <button class="act" data-act="mute">${sfx.muted ? 'Turn sound on' : 'Turn sound off'}</button>
            <button class="act" data-act="lapse-start">Watch a week go by</button>
            <button class="act" data-act="restart-ask">Start over</button>
@@ -334,7 +351,7 @@ export class Hud {
     const share = Math.round(shareOf(w, m) * 100);
     const mayInvest = canInvest(w, m);
     const foot = `
-      ${m.plan ? `<p class="plan"><b>${m.name}'s plan${account ? `, signed by ${account.id}` : ''}</b>${escapeHtml(m.plan)}</p>` : ''}
+      ${m.plan ? `<p class="plan"><b>${m.name}'s plan${account ? `, signed by ${account.id}` : ''}</b>${escapeHtml(m.plan)}${m.thinker ? `<small>Thought through by ${escapeHtml(String(m.thinker))}</small>` : ''}</p>` : ''}
       <div class="flash ${this.flash.kind}">${this.flash.text}</div>
       <footer>
         <span>${m.name} has ${m.coins} coins in the till.${account?.url ? ` <a href="${account.url}" target="_blank" rel="noopener">The shop's own NEAR account ↗</a>` : ''}<br />
@@ -344,11 +361,85 @@ export class Hud {
     this.el.shop.innerHTML = head + body + foot;
   }
 
+  /**
+   * How a "Sold ..." line ends: with the bonus, if the sale filled the shopkeeper's
+   * order, or with how far along that order now is, if the sale counted towards one.
+   */
+  private orderNote(r: ActionResult, id: MerchantId, good: GoodId): string {
+    const m = this.world.town.merchants[id];
+    if (r.bonus) return `, and a ${r.bonus}-coin bonus for filling ${m.name}'s order.`;
+    const open = this.world.orders().find((o) => o.merchant === id && o.good === good && o.wonBy === undefined);
+    const brought = open?.progress[this.world.me] ?? 0;
+    return open && brought > 0 ? `. That is ${brought} of the ${open.wanted} ${m.name} wants today.` : '.';
+  }
+
+  // ── The notice board ──────────────────────────────────────────────────────
+
+  openBoard() {
+    this.boardOpen = true;
+    this.el.boardWrap.classList.add('show');
+    this.setPrompt(null);
+    sfx.open();
+    this.renderBoard();
+  }
+
+  closeBoard() {
+    if (this.boardOpen) sfx.close();
+    this.boardOpen = false;
+    this.el.boardWrap.classList.remove('show');
+  }
+
+  /** One wanted order: who wants how many of what, the bonus, and how it stands. */
+  private orderLine(o: Order): string {
+    const w = this.world;
+    const m = w.town.merchants[o.merchant];
+    if (!m || !GOOD_IDS.includes(o.good)) return ''; // an order this version of the game does not understand
+    const won = o.wonBy !== undefined;
+    let state = `You have brought ${o.progress[w.me] ?? 0} of ${o.wanted}${isTradingHour(w) ? '' : '. The shops are shut for the night'}`;
+    if (won) state = o.wonBy === w.me ? 'Filled by you' : `Filled by ${escapeHtml(friendlyName(String(o.wonBy)))}`;
+    return `<div class="line${won ? ' won' : ''}">
+      <img class="item" src="${iconUrl(o.good)}" alt="" />
+      <div class="name">${m.name} wants ${o.wanted} ${GOODS[o.good].plural}<small>${state}</small></div>
+      <div class="bonus"><img src="${coinUrl()}" alt="" />${o.bonus}<small>bonus</small></div></div>`;
+  }
+
+  /** One row of the richest list. The player's own row is marked, and says what the town calls them. */
+  private richRow(place: number | '', r: Standing): string {
+    const w = this.world;
+    const known = w.mode === 'chain' ? `, known in town as ${escapeHtml(r.name)}` : '';
+    const note = r.me ? `${w.title()}${known}` : r.kind === 'shop' ? 'shopkeeper' : '';
+    return `<li${r.me ? ' class="me"' : ''}><span class="place">${place}</span>
+      <span class="who">${r.me ? 'You' : escapeHtml(r.name)}${note ? `<small>${note}</small>` : ''}</span>
+      <span class="worth"><img src="${coinUrl()}" alt="" />${r.worth}</span></li>`;
+  }
+
+  private renderBoard() {
+    const w = this.world;
+    const title = w.title();
+    const next = TITLES[TITLES.findIndex((t) => t.name === title) + 1];
+    const orders = w.orders();
+    const rows = w.richest();
+    // With many rich players in a shared town, a newcomer is not in the top eight: add their row below it.
+    const own: Standing = { name: friendlyName(w.me), worth: worthOf(w), kind: 'player', me: true };
+    this.el.board.innerHTML = `
+      <header>
+        <div><h2>Notice board</h2><p class="says">Your standing in town: <b>${title}</b>. ${next ? `Next comes ${next.name}: ${next.needs}.` : 'There is none higher.'}</p></div>
+        <button class="close" data-act="board-close"><kbd>Esc</kbd> Leave</button>
+      </header>
+      <h3>Wanted today</h3>
+      ${orders.map((o) => this.orderLine(o)).join('') || `<p class="quiet">${isTradingHour(w) ? 'Nobody is asking for anything today.' : 'Nothing is pinned up yet. New orders go up when the shops open at 6 in the morning.'}</p>`}
+      <h3>Richest in Brambleford</h3>
+      <ol class="rich">${rows.map((r, i) => this.richRow(i + 1, r)).join('')}${rows.some((r) => r.me) ? '' : this.richRow('', own)}</ol>
+      <footer><span>The first to bring a shopkeeper all that an order asks for earns the bonus, on top of the price.<br />
+      Your worth is your coins, your goods at their usual price, and ${TOWN.investCost / TOWN.investPct} coins for each 1% of a shop you own.</span></footer>`;
+  }
+
   private onClick(ev: MouseEvent) {
     const target = (ev.target as HTMLElement).closest<HTMLElement>('[data-act]');
     if (!target) {
       if (ev.target === this.el.shopWrap) this.closeShop();
       if (ev.target === this.el.menuWrap) this.closeMenu();
+      if (ev.target === this.el.boardWrap) this.closeBoard();
       return;
     }
     target.blur(); // otherwise Space, which is also "gather", would press this button again
@@ -374,6 +465,15 @@ export class Hud {
       case 'menu-close':
         this.closeMenu();
         return;
+      case 'board-open':
+        // From the Esc menu: one panel gives way to the other, with one sound, not two.
+        this.menuOpen = false;
+        this.el.menuWrap.classList.remove('show');
+        this.openBoard();
+        return;
+      case 'board-close':
+        this.closeBoard();
+        return;
       case 'restart-ask':
         this.renderMenu(true);
         return;
@@ -398,16 +498,16 @@ export class Hud {
       }
       case 'sell': {
         const r = w.sell(id!, good!);
-        this.flash = { text: r.ok ? `Sold 1 ${GOODS[good!].name.toLowerCase()} for ${r.price} coins.` : r.message, kind: r.ok ? 'good' : 'bad' };
-        r.ok ? sfx.coin() : sfx.nope();
+        this.flash = { text: r.ok ? `Sold 1 ${GOODS[good!].name.toLowerCase()} for ${r.price} coins${this.orderNote(r, id!, good!)}` : r.message, kind: r.ok ? 'good' : 'bad' };
+        r.ok ? (r.bonus ? sfx.goal() : sfx.coin()) : sfx.nope();
         break;
       }
       case 'sellall': {
         const r = w.sell(id!, good!, 999);
         this.flash = r.ok
-          ? { text: `Sold ${r.count} ${GOODS[good!].plural} for ${r.price} coins.${(r.count ?? 0) > 1 ? ' The price fell as you sold.' : ''}`, kind: 'good' }
+          ? { text: `Sold ${r.count} ${GOODS[good!].plural} for ${r.price} coins${this.orderNote(r, id!, good!)}${(r.count ?? 0) > 1 ? ' The price fell as you sold.' : ''}`, kind: 'good' }
           : { text: r.message, kind: 'bad' };
-        r.ok ? sfx.coin() : sfx.nope();
+        r.ok ? (r.bonus ? sfx.goal() : sfx.coin()) : sfx.nope();
         break;
       }
       case 'buy': {

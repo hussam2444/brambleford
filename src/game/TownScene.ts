@@ -22,6 +22,8 @@ const RESPAWN_MS = 45000;
 const VERB: Record<string, string> = { ore: 'Mine ore', wood: 'Chop wood', wheat: 'Cut wheat', fish: 'Fish here' };
 const CHARGES: Record<string, number> = { ore: 4, wood: 4, wheat: 2, fish: 5 };
 const REACH: Record<string, number> = { ore: 22, wood: 22, wheat: 13, fish: 25 };
+/** How close, in pixels, the player must stand to read the notice board. */
+const BOARD_REACH = 22;
 const CHIPS: Record<string, [number, number]> = {
   ore: [0xc8c8d4, 0xf0a23a], wood: [0x8a5a30, 0x58b85a], wheat: [0xe9c84e, 0xfbe58a], fish: [0xbfe6f7, 0xffffff],
 };
@@ -131,6 +133,12 @@ export class TownScene extends Phaser.Scene {
   private goals: Goal[] = [];
   private goalIndex = 0;
   private goalPause = 0;
+  /** True once the first-minute goals and their send-off are done. From then on the strip shows wanted orders. */
+  private goalsOver = false;
+  /** Which order, at what progress, the strip last showed, so it is only redrawn when that changes. */
+  private wantedShown: string | null = null;
+  /** The middle of the notice board's tile, if the map has a notice board. */
+  private board: { x: number; y: number } | null = null;
   private lastGather = 0;
   private zoom = 3;
 
@@ -272,6 +280,8 @@ export class TownScene extends Phaser.Scene {
     for (const b of BENCHES) this.stand('bench', b.x, b.y, 0, -2);
     BUSHES.forEach((b, i) => this.stand(`bush-${i % 4}`, b.x, b.y, 0, -2));
     for (const [key, x, y] of PROPS) this.stand(key, x, y, 0, -1);
+    const notices = PROPS.find(([key]) => key === 'noticeboard');
+    if (notices) this.board = { x: (notices[1] + 0.5) * T, y: (notices[2] + 0.5) * T };
     SHOPS.forEach((s, i) => {
       const yard = yardTile(s);
       const flip = yard.x === s.left ? -1 : 1;
@@ -476,20 +486,32 @@ export class TownScene extends Phaser.Scene {
     const g = this.goals[this.goalIndex];
     if (!g) {
       this.pointerAt = undefined;
-      this.hud.setGoal('That is the basics. Watch the town news: shortages are when prices jump.');
-      this.time.delayedCall(12000, () => this.hud.setGoal(null));
+      this.hud.setGoal('That is the basics. Watch the town news: shortages are when prices jump. The notice board in the square says what the shopkeepers want each day.');
+      this.time.delayedCall(12000, () => (this.goalsOver = true));
       return;
     }
     this.hud.setGoal(g.text);
     this.pointerAt = g.at;
   }
 
+  /** After the first-minute goals: keep today's first open order on the strip, or put the strip away. */
+  private showWanted() {
+    const open = isTradingHour(this.world) ? this.world.orders().find((o) => o.wonBy === undefined) : undefined;
+    const showing = open ? `${open.id}:${open.progress[this.world.me] ?? 0}` : '';
+    if (showing === this.wantedShown) return;
+    this.wantedShown = showing;
+    this.hud.setWanted(open ?? null);
+  }
+
   private updateGoal(time: number, delta: number) {
     const at = this.goalPause > 0 ? null : this.pointerAt?.();
-    this.pointer.setVisible(!!at && !this.hud.shopOpen);
+    this.pointer.setVisible(!!at && !this.hud.shopOpen && !this.hud.boardOpen);
     if (at) this.pointer.setPosition(at.x, at.y + Math.sin(time / 170) * 2.5);
 
-    if (this.goalIndex >= this.goals.length) return;
+    if (this.goalIndex >= this.goals.length) {
+      if (this.goalsOver) this.showWanted();
+      return;
+    }
     if (this.goalPause > 0) {
       this.goalPause -= delta;
       if (this.goalPause <= 0) {
@@ -513,6 +535,7 @@ export class TownScene extends Phaser.Scene {
     if (this.lapse || !this.started) return;
     this.hud.closeShop();
     this.hud.closeMenu();
+    this.hud.closeBoard();
     this.lapse = { live: this.world, history: [], done: false };
     this.world = LocalWorld.forecast(this.world, LAPSE.msPerHour);
     this.hud.setWorld(this.world);
@@ -591,6 +614,11 @@ export class TownScene extends Phaser.Scene {
       if (esc || act || stepped) this.hud.closeShop();
       return;
     }
+    if (this.hud.boardOpen) {
+      this.player.anims.stop();
+      if (esc || act) this.hud.closeBoard();
+      return;
+    }
     if (esc) {
       this.hud.openMenu();
       return;
@@ -600,11 +628,16 @@ export class TownScene extends Phaser.Scene {
     const target = this.nearest();
     if (!target) this.hud.setPrompt(null);
     else if (target.kind === 'keeper') this.hud.setPrompt(`<kbd>E</kbd> Talk to ${this.world.town.merchants[target.id].name}`);
+    else if (target.kind === 'board') this.hud.setPrompt('<kbd>E</kbd> Read the notice board');
     else this.hud.setPrompt(`<kbd>E</kbd> ${VERB[target.node.good]}`);
     if (!target) return;
 
     if (target.kind === 'keeper') {
       if (act) this.hud.openShop(target.id);
+      return;
+    }
+    if (target.kind === 'board') {
+      if (act) this.hud.openBoard();
       return;
     }
     // Hold the key to keep gathering, for as long as there is energy to do it.
@@ -773,6 +806,7 @@ export class TownScene extends Phaser.Scene {
   private nearest():
     | { kind: 'keeper'; id: MerchantId }
     | { kind: 'node'; node: GatherNode }
+    | { kind: 'board' }
     | null {
     const px = this.player.x;
     const py = this.player.y - 3;
@@ -786,6 +820,10 @@ export class TownScene extends Phaser.Scene {
       if (node.charges <= 0) continue;
       const d = Phaser.Math.Distance.Between(px, py, node.x, node.y);
       if (d < REACH[node.good] && d < bestDist) { best = { kind: 'node', node }; bestDist = d; }
+    }
+    if (this.board) {
+      const d = Phaser.Math.Distance.Between(px, py, this.board.x, this.board.y);
+      if (d < BOARD_REACH && d < bestDist) best = { kind: 'board' };
     }
     return best;
   }
