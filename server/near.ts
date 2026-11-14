@@ -13,6 +13,7 @@ import {
   Account, JsonRpcProvider, PublicKey, actions, decodeSignedDelegate, teraToGas,
   type KeyPairString,
 } from 'near-api-js';
+import { checkGoogleCredential } from './google.js';
 
 /** What a player's key is allowed to call on the contract. */
 export const PLAYER_METHODS = ['join', 'gather', 'sell', 'buy', 'eat', 'invest', 'tick'];
@@ -27,6 +28,8 @@ export interface ServerEnv {
   NEAR_CONTRACT_ID?: string;
   NEAR_RELAYER_ID?: string;
   NEAR_RELAYER_KEY?: string;
+  /** Optional. With it, players may sign in with Google. The same value the browser gets as VITE_GOOGLE_CLIENT_ID. */
+  GOOGLE_CLIENT_ID?: string;
 }
 
 export class HttpError extends Error {
@@ -46,7 +49,9 @@ function setup(env: ServerEnv) {
 }
 
 /** Create (or find) the NEAR account for a browser's key. The account name is derived from the key. */
-export async function join(env: ServerEnv, body: { publicKey?: string }, who = 'local') {
+export async function join(env: ServerEnv, body: { publicKey?: string; googleCredential?: string }, who = 'local') {
+  // A request that carries a Google credential is a sign-in. Everything below this line is the guest's way in, unchanged.
+  if (body.googleCredential != null) return joinWithGoogle(env, body, who);
   const { provider, relayer, contractId, relayerId } = setup(env);
   let key: PublicKey;
   try {
@@ -70,6 +75,110 @@ export async function join(env: ServerEnv, body: { publicKey?: string }, who = '
     actions: [actions.createAccount(), actions.addFunctionCallAccessKey(key, contractId, PLAYER_METHODS)],
   });
   return { accountId, created: true };
+}
+
+// ── Sign in with Google ─────────────────────────────────────────────────────
+//
+// A guest's account is named after their browser's key, so it lasts only as
+// long as that browser's storage does. A player who signs in with Google gets
+// an account named after their Google identity instead, and every browser they
+// sign in on has its own key added to that one account. Same account, same
+// player, on any device.
+//
+// Adding a key to an account takes a key that is allowed to change the
+// account. A browser's key is not (it may only call the game), and the player
+// has no wallet. So when the relayer makes one of these accounts it also puts
+// its own key on it, with full access. That key is what lets a second device
+// be added later. It also means that whoever holds NEAR_RELAYER_KEY can act
+// for any Google-linked player. Guest accounts carry no such key.
+
+/** Check a Google credential from the browser, then find or make that person's account. */
+async function joinWithGoogle(env: ServerEnv, body: { publicKey?: string; googleCredential?: string }, who: string) {
+  const clientId = env.GOOGLE_CLIENT_ID?.trim();
+  if (!clientId) throw new HttpError(503, 'Signing in with Google is not set up on this server.');
+  const check = await checkGoogleCredential(String(body.googleCredential), clientId);
+  if (!check.ok) throw new HttpError(401, check.reason);
+  return joinWithIdentity(env, String(body.publicKey), check.sub, who);
+}
+
+/**
+ * How many browsers one signed-in player can use at the same time.
+ *
+ * NEAR lets an account that holds no NEAR keep up to 770 bytes on chain for
+ * free (NEP-448), and a player's account holds none. The account itself takes
+ * 100 of those bytes and the relayer's key 82. Each browser's key takes 83,
+ * plus the name of the contract and the names of the methods it may call.
+ * With today's names that leaves room for three browsers.
+ */
+export function browserLimit(contractId: string): number {
+  const methodNames = PLAYER_METHODS.reduce((bytes, name) => bytes + 4 + name.length, 4);
+  const perBrowser = 83 + 4 + contractId.length + methodNames;
+  return Math.max(1, Math.floor((770 - 100 - 82) / perBrowser));
+}
+
+/** True if any step of a relayed change failed. The outer transaction can succeed while the change inside it does not. */
+function anyStepFailed(outcome: { receipts_outcome?: { outcome: { status: unknown } }[] }): boolean {
+  return (outcome.receipts_outcome ?? []).some(({ outcome: { status } }) => typeof status === 'object' && status !== null && 'Failure' in status);
+}
+
+/**
+ * Find or make the account that belongs to one signed-in person, and make sure
+ * this browser's key is on it. `sub` is the id the sign-in provider gives that
+ * person, which never changes. This does not talk to Google, so it can be
+ * tested against a chain on this machine.
+ */
+export async function joinWithIdentity(env: ServerEnv, publicKey: string, sub: string, who = 'local') {
+  const { provider, relayer, contractId, relayerId } = setup(env);
+  let key: PublicKey;
+  try {
+    key = PublicKey.fromString(publicKey);
+  } catch {
+    throw new HttpError(400, 'A valid public key is required.');
+  }
+  // The game only ever makes this kind of key, and the sums in `browserLimit` count on its size.
+  if (!key.toString().startsWith('ed25519:')) throw new HttpError(400, 'A valid public key is required.');
+  if (!sub) throw new HttpError(400, 'A signed-in identity is required.');
+  // The relayer's id is part of the name, so one person is a different account in a different town.
+  const name = createHash('sha256').update(`${sub}:${relayerId}`).digest('hex').slice(0, 16);
+  const accountId = `u${name}.${relayerId}`;
+
+  const exists = await provider.viewAccount({ accountId }).then(() => true, () => false);
+  if (!exists) {
+    // Making an account costs the relayer NEAR, so it counts against the limit, as it does for a guest.
+    if (!allow('join', who)) throw new HttpError(429, 'Too many new players from this address. Try again later.');
+    const relayerKey = await relayer.getSigner()!.getPublicKey();
+    await relayer.signAndSendTransaction({
+      receiverId: accountId,
+      actions: [actions.createAccount(), actions.addFullAccessKey(relayerKey), actions.addFunctionCallAccessKey(key, contractId, PLAYER_METHODS)],
+    });
+    return { accountId, created: true, google: true };
+  }
+
+  // This browser has signed in before: nothing to change, and nothing for the relayer to pay.
+  const { keys } = await provider.viewAccessKeyList({ accountId });
+  if (keys.some((k) => k.public_key === key.toString())) return { accountId, created: false, google: true };
+
+  // A browser this player has not used before. Adding its key costs the relayer a transaction, so it counts too.
+  if (!allow('join', who)) throw new HttpError(429, 'Too many sign-ins from this address. Try again later.');
+  // When the account is full, the browser added longest ago makes way. A key's counter starts
+  // from the block it was added in, so the lowest counter belongs to the oldest key. That
+  // browser is not locked out: it plays as a guest until its player signs in there again.
+  const browsers = keys.filter((k) => k.access_key.permission !== 'FullAccess').sort((a, b) => a.access_key.nonce - b.access_key.nonce);
+  const makeWay = browsers.slice(0, Math.max(0, browsers.length + 1 - browserLimit(contractId)));
+  // The account holds no NEAR, so it cannot pay to change itself. The relayer's key on the
+  // account signs the change as a meta transaction, and the relayer's own account pays for it.
+  const player = new Account(accountId, provider, env.NEAR_RELAYER_KEY as KeyPairString);
+  const { signedDelegate } = await player.createSignedMetaTransaction({
+    receiverId: accountId,
+    actions: [
+      ...makeWay.map((k) => actions.deleteKey(PublicKey.fromString(k.public_key))),
+      actions.addFunctionCallAccessKey(key, contractId, PLAYER_METHODS),
+    ],
+    blockHeightTtl: 120,
+  });
+  const outcome = await relayer.relayMetaTransaction(signedDelegate);
+  if (anyStepFailed(outcome)) throw new HttpError(500, 'Could not add this browser to your player. Try again in a moment.');
+  return { accountId, created: false, google: true };
 }
 
 /** Submit an action a player signed, paying its gas. Only calls to the game, from accounts made here, are accepted. */

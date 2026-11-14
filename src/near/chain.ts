@@ -14,6 +14,8 @@ import { Account, JsonRpcProvider, KeyPair, actions, encodeSignedDelegate, teraT
 import type { GoodId } from '../economy/goods';
 import * as Rules from '../economy/town';
 import type { ActionResult, GameWorld, MerchantId, Player, Town } from '../economy/world';
+import { AccessKeyDoesNotExistError, AccountDoesNotExistError } from 'near-api-js/rpc-errors'; // [google sign-in]
+import { forgetGoogleAccount, googleAccount, googleSignInLapsed } from './google'; // [google sign-in]
 
 const CONTRACT = import.meta.env.VITE_NEAR_CONTRACT_ID as string | undefined;
 const RPC = (import.meta.env.VITE_NEAR_RPC_URL as string | undefined) ?? 'https://test.rpc.fastnear.com';
@@ -56,11 +58,47 @@ function browserKey(): KeyPairString {
   return fresh;
 }
 
+// ── [google sign-in] start ──────────────────────────────────────────────────
+
+/** The public half of this browser's key. Signing in with Google adds it to the player's account. */
+export const browserPublicKey = () => KeyPair.fromString(browserKey()).getPublicKey().toString();
+
+/**
+ * A player who signed in with Google carries on as that account, using this
+ * browser's key. Returns null when nobody is signed in on this browser, or
+ * when the account no longer accepts this browser's key; the caller then
+ * plays as a guest.
+ */
+async function resumeSignedIn(contract: string, secret: KeyPairString, publicKey: string): Promise<ChainWorld | null> {
+  const accountId = googleAccount();
+  if (!accountId) return null;
+  const provider = new JsonRpcProvider({ url: RPC });
+  try {
+    // Reading the town needs no key, so a missing key would go unnoticed until the first
+    // action failed. Ask the chain now whether this browser's key is still on the account.
+    await provider.viewAccessKey({ accountId, publicKey });
+  } catch (err) {
+    // If the chain could not be asked at all, that is no reason to sign anyone out. The caller
+    // falls back to the practice town for this visit, exactly as it does for a guest.
+    if (!(err instanceof AccessKeyDoesNotExistError) && !(err instanceof AccountDoesNotExistError)) throw err;
+    // The key is gone, most likely because a newer browser took its place. Play as a guest.
+    googleSignInLapsed();
+    return null;
+  }
+  const world = new ChainWorld(new Account(accountId, provider, secret), provider, contract);
+  await world.begin();
+  return world;
+}
+
+// ── [google sign-in] end ────────────────────────────────────────────────────
+
 /** Returns the town on NEAR, or null if this build is not pointed at one. */
 export async function connectToChain(): Promise<GameWorld | null> {
   if (!CONTRACT || practiceRequested()) return null;
   const secret = browserKey();
   const publicKey = KeyPair.fromString(secret).getPublicKey().toString();
+  const signedIn = await resumeSignedIn(CONTRACT, secret, publicKey); // [google sign-in]
+  if (signedIn) return signedIn; // [google sign-in]
   const { accountId } = await post<{ accountId: string }>('join', { publicKey });
   const provider = new JsonRpcProvider({ url: RPC });
   const world = new ChainWorld(new Account(accountId, provider, secret), provider, CONTRACT);
@@ -150,12 +188,15 @@ export class ChainWorld implements GameWorld {
   }
 
   startOverNote() {
+    // [google sign-in] A signed-in player is not left behind for good: signing in again goes back to them.
+    if (googleAccount() === this.me) return 'You get a brand new guest player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. This signs you out. Your signed-in player keeps everything they own, and signing in again takes you back to them.';
     return 'You get a brand new player with 20 coins, on their own day 1. The town is shared with other players, so it carries on at whatever hour it is now. Your old player and everything they own stay behind for good.';
   }
 
   /** Forget this browser's key, so the next load makes a new account. */
   startOver() {
     try { localStorage.removeItem(`brambleford:key:${this.contractId}`); } catch { /* nothing was stored */ }
+    forgetGoogleAccount(); // [google sign-in] the new player is a guest
     location.reload();
   }
 
